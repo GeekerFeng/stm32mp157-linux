@@ -5,6 +5,8 @@ SUBLEVEL = 2
 EXTRAVERSION =
 NAME = Hurr durr I'ma ninja sloth
 
+ARCH=arm
+CROSS_COMPILE=arm-linux-gnueabi-
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
 # More info can be located in ./README
