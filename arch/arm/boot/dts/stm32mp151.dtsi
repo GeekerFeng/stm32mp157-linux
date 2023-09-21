@@ -1171,10 +1171,11 @@
 		};
 
 		rcc: rcc@50000000 {
-			compatible = "st,stm32mp1-rcc", "syscon";
+			compatible = "st,stm32mp1-rcc-secure", "syscon";
 			reg = <0x50000000 0x1000>;
 			#clock-cells = <1>;
 			#reset-cells = <1>;
+			status = "disabled";
 		};
 
 		pwr_regulators: pwr@50001000 {

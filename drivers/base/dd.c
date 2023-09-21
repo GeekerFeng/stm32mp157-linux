@@ -616,10 +616,12 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 		return -EPROBE_DEFER;
 	}
 
+    printk("debug probe %d\n",__LINE__);
 	link_ret = device_links_check_suppliers(dev);
 	if (link_ret == -EPROBE_DEFER)
 		return link_ret;
 
+    printk("debug probe %d\n",__LINE__);
 	pr_debug("bus: '%s': %s: probing driver %s with device %s\n",
 		 drv->bus->name, __func__, drv->name, dev_name(dev));
 	if (!list_empty(&dev->devres_head)) {
@@ -628,20 +630,24 @@ static int really_probe(struct device *dev, struct device_driver *drv)
 		goto done;
 	}
 
+    printk("debug probe %d\n",__LINE__);
 re_probe:
 	dev->driver = drv;
 
+    printk("debug probe %d\n",__LINE__);
 	/* If using pinctrl, bind pins now before probing */
 	ret = pinctrl_bind_pins(dev);
 	if (ret)
 		goto pinctrl_bind_failed;
 
+    printk("debug probe %d\n",__LINE__);
 	if (dev->bus->dma_configure) {
 		ret = dev->bus->dma_configure(dev);
 		if (ret)
 			goto pinctrl_bind_failed;
 	}
 
+    printk("debug probe %d\n",__LINE__);
 	ret = driver_sysfs_add(dev);
 	if (ret) {
 		pr_err("%s: driver_sysfs_add(%s) failed\n",
@@ -649,12 +655,14 @@ re_probe:
 		goto sysfs_failed;
 	}
 
+    printk("debug probe %d\n",__LINE__);
 	if (dev->pm_domain && dev->pm_domain->activate) {
 		ret = dev->pm_domain->activate(dev);
 		if (ret)
 			goto probe_failed;
 	}
 
+    printk("debug probe\n");
 	ret = call_driver_probe(dev, drv);
 	if (ret) {
 		/*
@@ -786,7 +794,7 @@ static int __driver_probe_device(struct device_driver *drv, struct device *dev)
 		return -EBUSY;
 
 	dev->can_match = true;
-	pr_debug("bus: '%s': %s: matched device %s with driver %s\n",
+	printk("\nbus: '%s': %s: matched device %s with driver %s\n",
 		 drv->bus->name, __func__, dev_name(dev), drv->name);
 
 	pm_runtime_get_suppliers(dev);

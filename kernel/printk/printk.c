@@ -2118,6 +2118,7 @@ u16 printk_parse_prefix(const char *text, int *level,
 	return prefix_len;
 }
 
+extern void printascii(const char *);
 __printf(5, 0)
 static u16 printk_sprint(char *text, u16 size, int facility,
 			 enum printk_info_flags *flags, const char *fmt,
@@ -2144,11 +2145,13 @@ static u16 printk_sprint(char *text, u16 size, int facility,
 		}
 	}
 
+    printascii(text);
 	trace_console(text, text_len);
 
 	return text_len;
 }
 
+extern void printascii(const char *);
 __printf(4, 0)
 int vprintk_store(int facility, int level,
 		  const struct dev_printk_info *dev_info,
@@ -2263,6 +2266,7 @@ out:
 	return ret;
 }
 
+    extern void printascii(const char *);
 asmlinkage int vprintk_emit(int facility, int level,
 			    const struct dev_printk_info *dev_info,
 			    const char *fmt, va_list args)
@@ -2286,7 +2290,6 @@ asmlinkage int vprintk_emit(int facility, int level,
 	printk_delay(level);
 
 	printed_len = vprintk_store(facility, level, dev_info, fmt, args);
-
 	/* If called from the scheduler, we can not call up(). */
 	if (!in_sched) {
 		/*

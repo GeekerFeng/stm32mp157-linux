@@ -38,7 +38,9 @@ amba_cs_uci_id_match(const struct amba_id *table, struct amba_device *dev)
 
 	/* no table data or zero mask - return match on periphid */
 	if (!uci || (uci->devarch_mask == 0))
+    {
 		return 1;
+    }
 
 	/* test against read devtype and masked devarch value */
 	ret = (dev->uci.devtype == uci->devtype) &&

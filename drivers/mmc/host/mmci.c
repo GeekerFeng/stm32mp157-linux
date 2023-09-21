@@ -2000,6 +2000,7 @@ static int mmci_probe(struct amba_device *dev,
 	struct mmc_host *mmc;
 	int ret;
 
+	printk("\ndebug pinctrl\n");
 	/* Must have platform data or Device Tree. */
 	if (!plat && !np) {
 		dev_err(&dev->dev, "No plat data or DT found\n");

@@ -25,6 +25,7 @@ void __printk_safe_exit(void)
 {
 	this_cpu_dec(printk_context);
 }
+    extern void printascii(const char *);
 
 asmlinkage int vprintk(const char *fmt, va_list args)
 {

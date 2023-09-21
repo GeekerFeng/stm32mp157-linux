@@ -1043,10 +1043,16 @@ int device_links_check_suppliers(struct device *dev)
 	mutex_lock(&fwnode_link_lock);
 	sup_fw = fwnode_links_check_suppliers(dev->fwnode);
 	if (sup_fw) {
+            printk("debug2 %d %d",fw_devlink_best_effort ,dev->can_match);
+            if(dev->fwnode)
+            {
+                printk("debug22 %ld\n",dev->fwnode->flags & FWNODE_FLAG_BEST_EFFORT);
+            }
 		if (!dev_is_best_effort(dev)) {
 			fwnode_ret = -EPROBE_DEFER;
 			dev_err_probe(dev, -EPROBE_DEFER,
 				    "wait for supplier %pfwf\n", sup_fw);
+            printk("wait for supplier %pfwf\n", sup_fw);
 		} else {
 			fwnode_ret = -EAGAIN;
 		}
