@@ -5,6 +5,8 @@ SUBLEVEL = 31
 EXTRAVERSION =
 NAME = Kleptomaniac Octopus
 
+ARCH=arm
+CROSS_COMPILE=arm-ostl-linux-gnueabi-
 # *DOCUMENTATION*
 # To see a list of typical targets execute "make help"
 # More info can be located in ./README
