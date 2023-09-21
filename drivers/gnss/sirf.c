@@ -439,18 +439,14 @@ static int sirf_probe(struct serdev_device *serdev)
 
 	data->on_off = devm_gpiod_get_optional(dev, "sirf,onoff",
 			GPIOD_OUT_LOW);
-	if (IS_ERR(data->on_off)) {
-		ret = PTR_ERR(data->on_off);
+	if (IS_ERR(data->on_off))
 		goto err_put_device;
-	}
 
 	if (data->on_off) {
 		data->wakeup = devm_gpiod_get_optional(dev, "sirf,wakeup",
 				GPIOD_IN);
-		if (IS_ERR(data->wakeup)) {
-			ret = PTR_ERR(data->wakeup);
+		if (IS_ERR(data->wakeup))
 			goto err_put_device;
-		}
 
 		ret = regulator_enable(data->vcc);
 		if (ret)
@@ -551,7 +547,7 @@ static void sirf_remove(struct serdev_device *serdev)
 		regulator_disable(data->vcc);
 
 	gnss_put_device(data->gdev);
-}
+};
 
 #ifdef CONFIG_OF
 static const struct of_device_id sirf_of_match[] = {

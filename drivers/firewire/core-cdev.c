@@ -10,7 +10,6 @@
 #include <linux/delay.h>
 #include <linux/device.h>
 #include <linux/dma-mapping.h>
-#include <linux/err.h>
 #include <linux/errno.h>
 #include <linux/firewire.h>
 #include <linux/firewire-cdev.h>
@@ -111,7 +110,6 @@ struct inbound_transaction_resource {
 	struct client_resource resource;
 	struct fw_card *card;
 	struct fw_request *request;
-	bool is_fcp;
 	void *data;
 	size_t length;
 };
@@ -119,7 +117,7 @@ struct inbound_transaction_resource {
 struct descriptor_resource {
 	struct client_resource resource;
 	struct fw_descriptor descriptor;
-	u32 data[];
+	u32 data[0];
 };
 
 struct iso_resource {
@@ -644,14 +642,19 @@ static int ioctl_send_request(struct client *client, union ioctl_arg *arg)
 			    client->device->max_speed);
 }
 
+static inline bool is_fcp_request(struct fw_request *request)
+{
+	return request == NULL;
+}
+
 static void release_request(struct client *client,
 			    struct client_resource *resource)
 {
 	struct inbound_transaction_resource *r = container_of(resource,
 			struct inbound_transaction_resource, resource);
 
-	if (r->is_fcp)
-		fw_request_put(r->request);
+	if (is_fcp_request(r->request))
+		kfree(r->data);
 	else
 		fw_send_response(r->card, r->request, RCODE_CONFLICT_ERROR);
 
@@ -665,19 +668,14 @@ static void handle_request(struct fw_card *card, struct fw_request *request,
 			   void *payload, size_t length, void *callback_data)
 {
 	struct address_handler_resource *handler = callback_data;
-	bool is_fcp = is_in_fcp_region(offset, length);
 	struct inbound_transaction_resource *r;
 	struct inbound_transaction_event *e;
 	size_t event_size0;
+	void *fcp_frame = NULL;
 	int ret;
 
 	/* card may be different from handler->client->device->card */
 	fw_card_get(card);
-
-	// Extend the lifetime of data for request so that its payload is safely accessible in
-	// the process context for the client.
-	if (is_fcp)
-		fw_request_get(request);
 
 	r = kmalloc(sizeof(*r), GFP_ATOMIC);
 	e = kmalloc(sizeof(*e), GFP_ATOMIC);
@@ -686,9 +684,20 @@ static void handle_request(struct fw_card *card, struct fw_request *request,
 
 	r->card    = card;
 	r->request = request;
-	r->is_fcp  = is_fcp;
 	r->data    = payload;
 	r->length  = length;
+
+	if (is_fcp_request(request)) {
+		/*
+		 * FIXME: Let core-transaction.c manage a
+		 * single reference-counted copy?
+		 */
+		fcp_frame = kmemdup(payload, length, GFP_ATOMIC);
+		if (fcp_frame == NULL)
+			goto failed;
+
+		r->data = fcp_frame;
+	}
 
 	r->resource.release = release_request;
 	ret = add_client_resource(handler->client, &r->resource, GFP_ATOMIC);
@@ -731,11 +740,10 @@ static void handle_request(struct fw_card *card, struct fw_request *request,
  failed:
 	kfree(r);
 	kfree(e);
+	kfree(fcp_frame);
 
-	if (!is_fcp)
+	if (!is_fcp_request(request))
 		fw_send_response(card, request, RCODE_CONFLICT_ERROR);
-	else
-		fw_request_put(request);
 
 	fw_card_put(card);
 }
@@ -810,19 +818,17 @@ static int ioctl_send_response(struct client *client, union ioctl_arg *arg)
 
 	r = container_of(resource, struct inbound_transaction_resource,
 			 resource);
-	if (r->is_fcp) {
-		fw_request_put(r->request);
+	if (is_fcp_request(r->request))
 		goto out;
-	}
 
 	if (a->length != fw_get_response_length(r->request)) {
 		ret = -EINVAL;
-		fw_request_put(r->request);
+		kfree(r->request);
 		goto out;
 	}
 	if (copy_from_user(r->data, u64_to_uptr(a->data), a->length)) {
 		ret = -EFAULT;
-		fw_request_put(r->request);
+		kfree(r->request);
 		goto out;
 	}
 	fw_send_response(r->card, r->request, a->rcode);
@@ -947,25 +953,11 @@ static enum dma_data_direction iso_dma_direction(struct fw_iso_context *context)
 			return DMA_FROM_DEVICE;
 }
 
-static struct fw_iso_context *fw_iso_mc_context_create(struct fw_card *card,
-						fw_iso_mc_callback_t callback,
-						void *callback_data)
-{
-	struct fw_iso_context *ctx;
-
-	ctx = fw_iso_context_create(card, FW_ISO_CONTEXT_RECEIVE_MULTICHANNEL,
-				    0, 0, 0, NULL, callback_data);
-	if (!IS_ERR(ctx))
-		ctx->callback.mc = callback;
-
-	return ctx;
-}
-
 static int ioctl_create_iso_context(struct client *client, union ioctl_arg *arg)
 {
 	struct fw_cdev_create_iso_context *a = &arg->create_iso_context;
 	struct fw_iso_context *context;
-	union fw_iso_callback cb;
+	fw_iso_callback_t cb;
 	int ret;
 
 	BUILD_BUG_ON(FW_CDEV_ISO_CONTEXT_TRANSMIT != FW_ISO_CONTEXT_TRANSMIT ||
@@ -978,7 +970,7 @@ static int ioctl_create_iso_context(struct client *client, union ioctl_arg *arg)
 		if (a->speed > SCODE_3200 || a->channel > 63)
 			return -EINVAL;
 
-		cb.sc = iso_callback;
+		cb = iso_callback;
 		break;
 
 	case FW_ISO_CONTEXT_RECEIVE:
@@ -986,24 +978,19 @@ static int ioctl_create_iso_context(struct client *client, union ioctl_arg *arg)
 		    a->channel > 63)
 			return -EINVAL;
 
-		cb.sc = iso_callback;
+		cb = iso_callback;
 		break;
 
 	case FW_ISO_CONTEXT_RECEIVE_MULTICHANNEL:
-		cb.mc = iso_mc_callback;
+		cb = (fw_iso_callback_t)iso_mc_callback;
 		break;
 
 	default:
 		return -EINVAL;
 	}
 
-	if (a->type == FW_ISO_CONTEXT_RECEIVE_MULTICHANNEL)
-		context = fw_iso_mc_context_create(client->device->card, cb.mc,
-						   client);
-	else
-		context = fw_iso_context_create(client->device->card, a->type,
-						a->channel, a->speed,
-						a->header_size, cb.sc, client);
+	context = fw_iso_context_create(client->device->card, a->type,
+			a->channel, a->speed, a->header_size, cb, client);
 	if (IS_ERR(context))
 		return PTR_ERR(context);
 	if (client->version < FW_CDEV_VERSION_AUTO_FLUSH_ISO_OVERFLOW)
@@ -1094,6 +1081,8 @@ static int ioctl_queue_iso(struct client *client, union ioctl_arg *arg)
 		return -EINVAL;
 
 	p = (struct fw_cdev_iso_packet __user *)u64_to_uptr(a->packets);
+	if (!access_ok(p, a->size))
+		return -EFAULT;
 
 	end = (void __user *)p + a->size;
 	count = 0;
@@ -1131,7 +1120,7 @@ static int ioctl_queue_iso(struct client *client, union ioctl_arg *arg)
 			&p->header[transmit_header_bytes / 4];
 		if (next > end)
 			return -EINVAL;
-		if (copy_from_user
+		if (__copy_from_user
 		    (u.packet.header, p->header, transmit_header_bytes))
 			return -EFAULT;
 		if (u.packet.skip && ctx->type == FW_ISO_CONTEXT_TRANSMIT &&
@@ -1204,14 +1193,12 @@ static int ioctl_get_cycle_timer2(struct client *client, union ioctl_arg *arg)
 	struct fw_cdev_get_cycle_timer2 *a = &arg->get_cycle_timer2;
 	struct fw_card *card = client->device->card;
 	struct timespec64 ts = {0, 0};
-	u32 cycle_time = 0;
+	u32 cycle_time;
 	int ret = 0;
 
 	local_irq_disable();
 
-	ret = fw_card_read_cycle_time(card, &cycle_time);
-	if (ret < 0)
-		goto end;
+	cycle_time = card->driver->read_csr(card, CSR_CYCLE_TIME);
 
 	switch (a->clk_id) {
 	case CLOCK_REALTIME:      ktime_get_real_ts64(&ts);	break;
@@ -1220,7 +1207,7 @@ static int ioctl_get_cycle_timer2(struct client *client, union ioctl_arg *arg)
 	default:
 		ret = -EINVAL;
 	}
-end:
+
 	local_irq_enable();
 
 	a->tv_sec      = ts.tv_sec;
@@ -1495,7 +1482,6 @@ static void outbound_phy_packet_callback(struct fw_packet *packet,
 {
 	struct outbound_phy_packet_event *e =
 		container_of(packet, struct outbound_phy_packet_event, p);
-	struct client *e_client;
 
 	switch (status) {
 	/* expected: */
@@ -1512,10 +1498,9 @@ static void outbound_phy_packet_callback(struct fw_packet *packet,
 	}
 	e->phy_packet.data[0] = packet->timestamp;
 
-	e_client = e->client;
 	queue_event(e->client, &e->event, &e->phy_packet,
 		    sizeof(e->phy_packet) + e->phy_packet.length, NULL, 0);
-	client_put(e_client);
+	client_put(e->client);
 }
 
 static int ioctl_send_phy_packet(struct client *client, union ioctl_arg *arg)
@@ -1661,6 +1646,14 @@ static long fw_device_op_ioctl(struct file *file,
 	return dispatch_ioctl(file->private_data, cmd, (void __user *)arg);
 }
 
+#ifdef CONFIG_COMPAT
+static long fw_device_op_compat_ioctl(struct file *file,
+				      unsigned int cmd, unsigned long arg)
+{
+	return dispatch_ioctl(file->private_data, cmd, compat_ptr(arg));
+}
+#endif
+
 static int fw_device_op_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	struct client *client = file->private_data;
@@ -1701,8 +1694,7 @@ static int fw_device_op_mmap(struct file *file, struct vm_area_struct *vma)
 	if (ret < 0)
 		goto fail;
 
-	ret = vm_map_pages_zero(vma, client->buffer.pages,
-				client->buffer.page_count);
+	ret = fw_iso_buffer_map_vma(&client->buffer, vma);
 	if (ret < 0)
 		goto fail;
 
@@ -1803,5 +1795,7 @@ const struct file_operations fw_device_ops = {
 	.mmap		= fw_device_op_mmap,
 	.release	= fw_device_op_release,
 	.poll		= fw_device_op_poll,
-	.compat_ioctl	= compat_ptr_ioctl,
+#ifdef CONFIG_COMPAT
+	.compat_ioctl	= fw_device_op_compat_ioctl,
+#endif
 };

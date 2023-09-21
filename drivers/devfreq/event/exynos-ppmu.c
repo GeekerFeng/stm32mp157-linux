@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * exynos_ppmu.c - Exynos PPMU (Platform Performance Monitoring Unit) support
+ * exynos_ppmu.c - EXYNOS PPMU (Platform Performance Monitoring Unit) support
  *
  * Copyright (c) 2014-2015 Samsung Electronics Co., Ltd.
  * Author : Chanwoo Choi <cw00.choi@samsung.com>
@@ -94,16 +94,11 @@ static struct __exynos_ppmu_events {
 	PPMU_EVENT(d1-general),
 	PPMU_EVENT(d1-rt),
 
-	/* For Exynos5422 SoC, deprecated (backwards compatible) */
+	/* For Exynos5422 SoC */
 	PPMU_EVENT(dmc0_0),
 	PPMU_EVENT(dmc0_1),
 	PPMU_EVENT(dmc1_0),
 	PPMU_EVENT(dmc1_1),
-	/* For Exynos5422 SoC */
-	PPMU_EVENT(dmc0-0),
-	PPMU_EVENT(dmc0-1),
-	PPMU_EVENT(dmc1-0),
-	PPMU_EVENT(dmc1-1),
 };
 
 static int __exynos_ppmu_find_ppmu_id(const char *edev_name)
@@ -519,19 +514,15 @@ static int of_get_devfreq_events(struct device_node *np,
 
 	count = of_get_child_count(events_np);
 	desc = devm_kcalloc(dev, count, sizeof(*desc), GFP_KERNEL);
-	if (!desc) {
-		of_node_put(events_np);
+	if (!desc)
 		return -ENOMEM;
-	}
 	info->num_events = count;
 
 	of_id = of_match_device(exynos_ppmu_id_match, dev);
 	if (of_id)
 		info->ppmu_type = (enum exynos_ppmu_type)of_id->data;
-	else {
-		of_node_put(events_np);
+	else
 		return -EINVAL;
-	}
 
 	j = 0;
 	for_each_child_of_node(events_np, node) {
@@ -570,10 +561,13 @@ static int of_get_devfreq_events(struct device_node *np,
 			 * use default if not.
 			 */
 			if (info->ppmu_type == EXYNOS_TYPE_PPMU_V2) {
+				int id;
 				/* Not all registers take the same value for
 				 * read+write data count.
 				 */
-				switch (ppmu_events[i].id) {
+				id = __exynos_ppmu_find_ppmu_id(desc[j].name);
+
+				switch (id) {
 				case PPMU_PMNCNT0:
 				case PPMU_PMNCNT1:
 				case PPMU_PMNCNT2:
@@ -621,7 +615,8 @@ static int exynos_ppmu_parse_dt(struct platform_device *pdev,
 	}
 
 	/* Maps the memory mapped IO to control PPMU register */
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -681,6 +676,7 @@ static int exynos_ppmu_probe(struct platform_device *pdev)
 	for (i = 0; i < info->num_events; i++) {
 		edev[i] = devm_devfreq_event_add_edev(&pdev->dev, &desc[i]);
 		if (IS_ERR(edev[i])) {
+			ret = PTR_ERR(edev[i]);
 			dev_err(&pdev->dev,
 				"failed to add devfreq-event device\n");
 			return PTR_ERR(edev[i]);

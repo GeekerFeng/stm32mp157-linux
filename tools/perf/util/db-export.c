@@ -179,9 +179,9 @@ static int db_ids_from_al(struct db_export *dbe, struct addr_location *al,
 	int err;
 
 	if (al->map) {
-		struct dso *dso = map__dso(al->map);
+		struct dso *dso = al->map->dso;
 
-		err = db_export__dso(dbe, dso, maps__machine(al->maps));
+		err = db_export__dso(dbe, dso, al->machine);
 		if (err)
 			return err;
 		*dso_db_id = dso->db_id;
@@ -249,13 +249,13 @@ static struct call_path *call_path_from_sample(struct db_export *dbe,
 		 * constructing an addr_location struct and then passing it to
 		 * db_ids_from_al() to perform the export.
 		 */
-		al.sym = node->ms.sym;
-		al.map = node->ms.map;
-		al.maps = thread->maps;
+		al.sym = node->sym;
+		al.map = node->map;
+		al.machine = machine;
 		al.addr = node->ip;
 
 		if (al.map && !al.sym)
-			al.sym = dso__find_symbol(map__dso(al.map), al.addr);
+			al.sym = dso__find_symbol(al.map->dso, al.addr);
 
 		db_ids_from_al(dbe, &al, &dso_db_id, &sym_db_id, &offset);
 
@@ -343,7 +343,7 @@ static int db_export__threads(struct db_export *dbe, struct thread *thread,
 
 int db_export__sample(struct db_export *dbe, union perf_event *event,
 		      struct perf_sample *sample, struct evsel *evsel,
-		      struct addr_location *al, struct addr_location *addr_al)
+		      struct addr_location *al)
 {
 	struct thread *thread = al->thread;
 	struct export_sample es = {
@@ -354,21 +354,19 @@ int db_export__sample(struct db_export *dbe, union perf_event *event,
 	};
 	struct thread *main_thread;
 	struct comm *comm = NULL;
-	struct machine *machine;
 	int err;
 
 	err = db_export__evsel(dbe, evsel);
 	if (err)
 		return err;
 
-	machine = maps__machine(al->maps);
-	err = db_export__machine(dbe, machine);
+	err = db_export__machine(dbe, al->machine);
 	if (err)
 		return err;
 
-	main_thread = thread__main_thread(machine, thread);
+	main_thread = thread__main_thread(al->machine, thread);
 
-	err = db_export__threads(dbe, thread, main_thread, machine, &comm);
+	err = db_export__threads(dbe, thread, main_thread, al->machine, &comm);
 	if (err)
 		goto out_put;
 
@@ -382,7 +380,7 @@ int db_export__sample(struct db_export *dbe, union perf_event *event,
 		goto out_put;
 
 	if (dbe->cpr) {
-		struct call_path *cp = call_path_from_sample(dbe, machine,
+		struct call_path *cp = call_path_from_sample(dbe, al->machine,
 							     thread, sample,
 							     evsel);
 		if (cp) {
@@ -391,14 +389,18 @@ int db_export__sample(struct db_export *dbe, union perf_event *event,
 		}
 	}
 
-	if (addr_al) {
-		err = db_ids_from_al(dbe, addr_al, &es.addr_dso_db_id,
+	if ((evsel->core.attr.sample_type & PERF_SAMPLE_ADDR) &&
+	    sample_addr_correlates_sym(&evsel->core.attr)) {
+		struct addr_location addr_al;
+
+		thread__resolve(thread, &addr_al, sample);
+		err = db_ids_from_al(dbe, &addr_al, &es.addr_dso_db_id,
 				     &es.addr_sym_db_id, &es.addr_offset);
 		if (err)
 			goto out_put;
 		if (dbe->crp) {
 			err = thread_stack__process(thread, comm, sample, al,
-						    addr_al, es.db_id,
+						    &addr_al, es.db_id,
 						    dbe->crp);
 			if (err)
 				goto out_put;
@@ -436,8 +438,6 @@ static struct {
 	{PERF_IP_FLAG_BRANCH | PERF_IP_FLAG_TX_ABORT, "transaction abort"},
 	{PERF_IP_FLAG_BRANCH | PERF_IP_FLAG_TRACE_BEGIN, "trace begin"},
 	{PERF_IP_FLAG_BRANCH | PERF_IP_FLAG_TRACE_END, "trace end"},
-	{PERF_IP_FLAG_BRANCH | PERF_IP_FLAG_CALL | PERF_IP_FLAG_VMENTRY, "vm entry"},
-	{PERF_IP_FLAG_BRANCH | PERF_IP_FLAG_CALL | PERF_IP_FLAG_VMEXIT, "vm exit"},
 	{0, NULL}
 };
 

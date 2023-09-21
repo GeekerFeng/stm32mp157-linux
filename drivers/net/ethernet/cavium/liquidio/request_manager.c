@@ -40,6 +40,15 @@ static void  __check_db_timeout(struct octeon_device *oct, u64 iq_no);
 
 static void (*reqtype_free_fn[MAX_OCTEON_DEVICES][REQTYPE_LAST + 1]) (void *);
 
+static inline int IQ_INSTR_MODE_64B(struct octeon_device *oct, int iq_no)
+{
+	struct octeon_instr_queue *iq =
+	    (struct octeon_instr_queue *)oct->instr_queue[iq_no];
+	return iq->iqcmd_64B;
+}
+
+#define IQ_INSTR_MODE_32B(oct, iq_no)  (!IQ_INSTR_MODE_64B(oct, iq_no))
+
 /* Define this to return the request status comaptible to old code */
 /*#define OCTEON_USE_OLD_REQ_STATUS*/
 
@@ -86,16 +95,20 @@ int octeon_init_instr_queue(struct octeon_device *oct,
 	/* Initialize a list to holds requests that have been posted to Octeon
 	 * but has yet to be fetched by octeon
 	 */
-	iq->request_list = vzalloc_node(array_size(num_descs, sizeof(*iq->request_list)),
-					numa_node);
+	iq->request_list = vmalloc_node((sizeof(*iq->request_list) * num_descs),
+					       numa_node);
 	if (!iq->request_list)
-		iq->request_list = vzalloc(array_size(num_descs, sizeof(*iq->request_list)));
+		iq->request_list =
+			vmalloc(array_size(num_descs,
+					   sizeof(*iq->request_list)));
 	if (!iq->request_list) {
 		lio_dma_free(oct, q_size, iq->base_addr, iq->base_addr_dma);
 		dev_err(&oct->pci_dev->dev, "Alloc failed for IQ[%d] nr free list\n",
 			iq_no);
 		return 1;
 	}
+
+	memset(iq->request_list, 0, sizeof(*iq->request_list) * num_descs);
 
 	dev_dbg(&oct->pci_dev->dev, "IQ[%d]: base: %p basedma: %pad count: %d\n",
 		iq_no, iq->base_addr, &iq->base_addr_dma, iq->max_count);

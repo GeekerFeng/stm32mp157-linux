@@ -31,7 +31,6 @@
 #include <linux/stm.h>
 
 #include "coresight-priv.h"
-#include "coresight-trace-id.h"
 
 #define STMDMASTARTR			0xc04
 #define STMDMASTOPR			0xc08
@@ -97,7 +96,7 @@ module_param_named(
 	boot_nr_channel, boot_nr_channel, int, S_IRUGO
 );
 
-/*
+/**
  * struct channel_space - central management entity for extended ports
  * @base:		memory mapped base address where channels start.
  * @phys:		physical base address of channel region.
@@ -259,7 +258,6 @@ static void stm_disable(struct coresight_device *csdev,
 			struct perf_event *event)
 {
 	struct stm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
-	struct csdev_access *csa = &csdev->access;
 
 	/*
 	 * For as long as the tracer isn't disabled another entity can't
@@ -272,7 +270,7 @@ static void stm_disable(struct coresight_device *csdev,
 		spin_unlock(&drvdata->spinlock);
 
 		/* Wait until the engine has completely stopped */
-		coresight_timeout(csa, STMTCSR, STMTCSR_BUSY_BIT, 0);
+		coresight_timeout(drvdata->base, STMTCSR, STMTCSR_BUSY_BIT, 0);
 
 		pm_runtime_put(csdev->dev.parent);
 
@@ -281,7 +279,15 @@ static void stm_disable(struct coresight_device *csdev,
 	}
 }
 
+static int stm_trace_id(struct coresight_device *csdev)
+{
+	struct stm_drvdata *drvdata = dev_get_drvdata(csdev->dev.parent);
+
+	return drvdata->traceid;
+}
+
 static const struct coresight_ops_source stm_source_ops = {
+	.trace_id	= stm_trace_id,
 	.enable		= stm_enable,
 	.disable	= stm_disable,
 };
@@ -406,7 +412,6 @@ static ssize_t notrace stm_generic_packet(struct stm_data *stm_data,
 	void __iomem *ch_addr;
 	struct stm_drvdata *drvdata = container_of(stm_data,
 						   struct stm_drvdata, stm);
-	unsigned int stm_flags;
 
 	if (!(drvdata && local_read(&drvdata->mode)))
 		return -EACCES;
@@ -416,9 +421,8 @@ static ssize_t notrace stm_generic_packet(struct stm_data *stm_data,
 
 	ch_addr = stm_channel_addr(drvdata, channel);
 
-	stm_flags = (flags & STP_PACKET_TIMESTAMPED) ?
-			STM_FLAG_TIMESTAMPED : 0;
-	stm_flags |= test_bit(channel, drvdata->chs.guaranteed) ?
+	flags = (flags == STP_PACKET_TIMESTAMPED) ? STM_FLAG_TIMESTAMPED : 0;
+	flags |= test_bit(channel, drvdata->chs.guaranteed) ?
 			   STM_FLAG_GUARANTEED : 0;
 
 	if (size > drvdata->write_bytes)
@@ -428,7 +432,7 @@ static ssize_t notrace stm_generic_packet(struct stm_data *stm_data,
 
 	switch (packet) {
 	case STP_PACKET_FLAG:
-		ch_addr += stm_channel_off(STM_PKT_TYPE_FLAG, stm_flags);
+		ch_addr += stm_channel_off(STM_PKT_TYPE_FLAG, flags);
 
 		/*
 		 * The generic STM core sets a size of '0' on flag packets.
@@ -440,8 +444,7 @@ static ssize_t notrace stm_generic_packet(struct stm_data *stm_data,
 		break;
 
 	case STP_PACKET_DATA:
-		stm_flags |= (flags & STP_PACKET_MARKED) ? STM_FLAG_MARKED : 0;
-		ch_addr += stm_channel_off(STM_PKT_TYPE_DATA, stm_flags);
+		ch_addr += stm_channel_off(STM_PKT_TYPE_DATA, flags);
 		stm_send(ch_addr, payload, size,
 				drvdata->write_bytes);
 		break;
@@ -608,7 +611,40 @@ static ssize_t traceid_show(struct device *dev,
 	val = drvdata->traceid;
 	return sprintf(buf, "%#lx\n", val);
 }
-static DEVICE_ATTR_RO(traceid);
+
+static ssize_t traceid_store(struct device *dev,
+			     struct device_attribute *attr,
+			     const char *buf, size_t size)
+{
+	int ret;
+	unsigned long val;
+	struct stm_drvdata *drvdata = dev_get_drvdata(dev->parent);
+
+	ret = kstrtoul(buf, 16, &val);
+	if (ret)
+		return ret;
+
+	/* traceid field is 7bit wide on STM32 */
+	drvdata->traceid = val & 0x7f;
+	return size;
+}
+static DEVICE_ATTR_RW(traceid);
+
+#define coresight_stm_reg(name, offset)	\
+	coresight_simple_reg32(struct stm_drvdata, name, offset)
+
+coresight_stm_reg(tcsr, STMTCSR);
+coresight_stm_reg(tsfreqr, STMTSFREQR);
+coresight_stm_reg(syncr, STMSYNCR);
+coresight_stm_reg(sper, STMSPER);
+coresight_stm_reg(spter, STMSPTER);
+coresight_stm_reg(privmaskr, STMPRIVMASKR);
+coresight_stm_reg(spscr, STMSPSCR);
+coresight_stm_reg(spmscr, STMSPMSCR);
+coresight_stm_reg(spfeat1r, STMSPFEAT1R);
+coresight_stm_reg(spfeat2r, STMSPFEAT2R);
+coresight_stm_reg(spfeat3r, STMSPFEAT3R);
+coresight_stm_reg(devid, CORESIGHT_DEVID);
 
 static struct attribute *coresight_stm_attrs[] = {
 	&dev_attr_hwevent_enable.attr,
@@ -620,18 +656,18 @@ static struct attribute *coresight_stm_attrs[] = {
 };
 
 static struct attribute *coresight_stm_mgmt_attrs[] = {
-	coresight_simple_reg32(tcsr, STMTCSR),
-	coresight_simple_reg32(tsfreqr, STMTSFREQR),
-	coresight_simple_reg32(syncr, STMSYNCR),
-	coresight_simple_reg32(sper, STMSPER),
-	coresight_simple_reg32(spter, STMSPTER),
-	coresight_simple_reg32(privmaskr, STMPRIVMASKR),
-	coresight_simple_reg32(spscr, STMSPSCR),
-	coresight_simple_reg32(spmscr, STMSPMSCR),
-	coresight_simple_reg32(spfeat1r, STMSPFEAT1R),
-	coresight_simple_reg32(spfeat2r, STMSPFEAT2R),
-	coresight_simple_reg32(spfeat3r, STMSPFEAT3R),
-	coresight_simple_reg32(devid, CORESIGHT_DEVID),
+	&dev_attr_tcsr.attr,
+	&dev_attr_tsfreqr.attr,
+	&dev_attr_syncr.attr,
+	&dev_attr_sper.attr,
+	&dev_attr_spter.attr,
+	&dev_attr_privmaskr.attr,
+	&dev_attr_spscr.attr,
+	&dev_attr_spmscr.attr,
+	&dev_attr_spfeat1r.attr,
+	&dev_attr_spfeat2r.attr,
+	&dev_attr_spfeat3r.attr,
+	&dev_attr_devid.attr,
 	NULL,
 };
 
@@ -691,6 +727,8 @@ static int acpi_stm_get_stimulus_area(struct device *dev, struct resource *res)
 
 	struct acpi_device *adev = ACPI_COMPANION(dev);
 
+	if (!adev)
+		return -ENODEV;
 	rc = acpi_dev_get_resources(adev, &res_list, NULL, NULL);
 	if (rc < 0)
 		return rc;
@@ -779,6 +817,14 @@ static void stm_init_default_data(struct stm_drvdata *drvdata)
 	 */
 	drvdata->stmsper = ~0x0;
 
+	/*
+	 * The trace ID value for *ETM* tracers start at CPU_ID * 2 + 0x10 and
+	 * anything equal to or higher than 0x70 is reserved.  Since 0x00 is
+	 * also reserved the STM trace ID needs to be higher than 0x00 and
+	 * lowner than 0x10.
+	 */
+	drvdata->traceid = 0x1;
+
 	/* Set invariant transaction timing on all channels */
 	bitmap_clear(drvdata->chs.guaranteed, 0, drvdata->numsp);
 }
@@ -806,13 +852,15 @@ static void stm_init_generic_data(struct stm_drvdata *drvdata,
 
 static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 {
-	int ret, trace_id;
+	int ret;
 	void __iomem *base;
+	unsigned long *guaranteed;
 	struct device *dev = &adev->dev;
 	struct coresight_platform_data *pdata = NULL;
 	struct stm_drvdata *drvdata;
 	struct resource *res = &adev->res;
 	struct resource ch_res;
+	size_t bitmap_size;
 	struct coresight_desc desc = { 0 };
 
 	desc.name = coresight_alloc_device_name(&stm_devs, dev);
@@ -835,7 +883,6 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 	drvdata->base = base;
-	desc.access = CSDEV_ACCESS_IOMEM(base);
 
 	ret = stm_get_stimulus_area(dev, &ch_res);
 	if (ret)
@@ -854,10 +901,12 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 	else
 		drvdata->numsp = stm_num_stimulus_port(drvdata);
 
-	drvdata->chs.guaranteed = devm_bitmap_zalloc(dev, drvdata->numsp,
-						     GFP_KERNEL);
-	if (!drvdata->chs.guaranteed)
+	bitmap_size = BITS_TO_LONGS(drvdata->numsp) * sizeof(long);
+
+	guaranteed = devm_kzalloc(dev, bitmap_size, GFP_KERNEL);
+	if (!guaranteed)
 		return -ENOMEM;
+	drvdata->chs.guaranteed = guaranteed;
 
 	spin_lock_init(&drvdata->spinlock);
 
@@ -890,35 +939,15 @@ static int stm_probe(struct amba_device *adev, const struct amba_id *id)
 		goto stm_unregister;
 	}
 
-	trace_id = coresight_trace_id_get_system_id();
-	if (trace_id < 0) {
-		ret = trace_id;
-		goto cs_unregister;
-	}
-	drvdata->traceid = (u8)trace_id;
-
 	pm_runtime_put(&adev->dev);
 
 	dev_info(&drvdata->csdev->dev, "%s initialized\n",
 		 (char *)coresight_get_uci_data(id));
 	return 0;
 
-cs_unregister:
-	coresight_unregister(drvdata->csdev);
-
 stm_unregister:
 	stm_unregister_device(&drvdata->stm);
 	return ret;
-}
-
-static void stm_remove(struct amba_device *adev)
-{
-	struct stm_drvdata *drvdata = dev_get_drvdata(&adev->dev);
-
-	coresight_trace_id_put_system_id(drvdata->traceid);
-	coresight_unregister(drvdata->csdev);
-
-	stm_unregister_device(&drvdata->stm);
 }
 
 #ifdef CONFIG_PM
@@ -953,8 +982,6 @@ static const struct amba_id stm_ids[] = {
 	{ 0, 0},
 };
 
-MODULE_DEVICE_TABLE(amba, stm_ids);
-
 static struct amba_driver stm_driver = {
 	.drv = {
 		.name   = "coresight-stm",
@@ -963,12 +990,7 @@ static struct amba_driver stm_driver = {
 		.suppress_bind_attrs = true,
 	},
 	.probe          = stm_probe,
-	.remove         = stm_remove,
 	.id_table	= stm_ids,
 };
 
-module_amba_driver(stm_driver);
-
-MODULE_AUTHOR("Pratik Patel <pratikp@codeaurora.org>");
-MODULE_DESCRIPTION("Arm CoreSight System Trace Macrocell driver");
-MODULE_LICENSE("GPL v2");
+builtin_amba_driver(stm_driver);

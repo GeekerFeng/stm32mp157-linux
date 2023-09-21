@@ -73,8 +73,10 @@ static int board_added(struct controller *ctrl)
 
 	/* Check link training status */
 	retval = pciehp_check_link_status(ctrl);
-	if (retval)
+	if (retval) {
+		ctrl_err(ctrl, "Failed to check link status\n");
 		goto err_exit;
+	}
 
 	/* Check for a power fault */
 	if (ctrl->power_fault_detected || pciehp_query_power_fault(ctrl)) {
@@ -224,7 +226,7 @@ void pciehp_handle_disable_request(struct controller *ctrl)
 
 void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 {
-	int present, link_active;
+	bool present, link_active;
 
 	/*
 	 * If the slot is on and presence or link has changed, turn it off.
@@ -234,7 +236,7 @@ void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 	switch (ctrl->state) {
 	case BLINKINGOFF_STATE:
 		cancel_delayed_work(&ctrl->button_work);
-		fallthrough;
+		/* fall through */
 	case ON_STATE:
 		ctrl->state = POWEROFF_STATE;
 		mutex_unlock(&ctrl->state_lock);
@@ -255,7 +257,7 @@ void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 	mutex_lock(&ctrl->state_lock);
 	present = pciehp_card_present(ctrl);
 	link_active = pciehp_check_link_active(ctrl);
-	if (present <= 0 && link_active <= 0) {
+	if (!present && !link_active) {
 		mutex_unlock(&ctrl->state_lock);
 		return;
 	}
@@ -263,7 +265,7 @@ void pciehp_handle_presence_or_link_change(struct controller *ctrl, u32 events)
 	switch (ctrl->state) {
 	case BLINKINGON_STATE:
 		cancel_delayed_work(&ctrl->button_work);
-		fallthrough;
+		/* fall through */
 	case OFF_STATE:
 		ctrl->state = POWERON_STATE;
 		mutex_unlock(&ctrl->state_lock);

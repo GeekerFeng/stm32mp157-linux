@@ -51,10 +51,12 @@
 #include <drm/drm_drv.h>
 #include <drm/drm_file.h>
 
-#include <drm/ttm/ttm_bo.h>
+#include <drm/ttm/ttm_bo_api.h>
+#include <drm/ttm/ttm_bo_driver.h>
 #include <drm/ttm/ttm_placement.h>
-
-#include <drm/drm_audio_component.h>
+#include <drm/ttm/ttm_memory.h>
+#include <drm/ttm/ttm_module.h>
+#include <drm/ttm/ttm_page_alloc.h>
 
 #include "uapi/drm/nouveau_drm.h"
 
@@ -77,6 +79,11 @@ enum nouveau_drm_object_route {
 	NVDRM_OBJECT_ANY = NVIF_IOCTL_V0_OWNER_ANY,
 };
 
+enum nouveau_drm_notify_route {
+	NVDRM_NOTIFY_NVIF = 0,
+	NVDRM_NOTIFY_USIF
+};
+
 enum nouveau_drm_handle {
 	NVDRM_CHAN    = 0xcccc0000, /* |= client chid */
 	NVDRM_NVSW    = 0x55550000,
@@ -96,6 +103,7 @@ struct nouveau_cli {
 	struct list_head head;
 	void *abi16;
 	struct list_head objects;
+	struct list_head notifys;
 	char name[32];
 
 	struct work_struct work;
@@ -122,22 +130,13 @@ nouveau_cli(struct drm_file *fpriv)
 }
 
 #include <nvif/object.h>
-#include <nvif/parent.h>
 
 struct nouveau_drm {
-	struct nvif_parent parent;
 	struct nouveau_cli master;
 	struct nouveau_cli client;
 	struct drm_device *dev;
 
 	struct list_head clients;
-
-	/**
-	 * @clients_lock: Protects access to the @clients list of &struct nouveau_cli.
-	 */
-	struct mutex clients_lock;
-
-	u8 old_pm_cap;
 
 	struct {
 		struct agp_bridge_data *bridge;
@@ -148,19 +147,17 @@ struct nouveau_drm {
 
 	/* TTM interface support */
 	struct {
-		struct ttm_device bdev;
+		struct ttm_bo_device bdev;
 		atomic_t validate_sequence;
 		int (*move)(struct nouveau_channel *,
 			    struct ttm_buffer_object *,
-			    struct ttm_resource *, struct ttm_resource *);
+			    struct ttm_mem_reg *, struct ttm_mem_reg *);
 		struct nouveau_channel *chan;
 		struct nvif_object copy;
 		int mtrr;
 		int type_vram;
 		int type_host[2];
 		int type_ncoh[2];
-		struct mutex io_reserve_mutex;
-		struct list_head io_reserve_lru;
 	} ttm;
 
 	/* GEM interface support */
@@ -173,19 +170,17 @@ struct nouveau_drm {
 	void *fence;
 
 	/* Global channel management. */
-	int chan_total; /* Number of channels across all runlists. */
-	int chan_nr;	/* 0 if per-runlist CHIDs. */
-	int runl_nr;
 	struct {
-		int chan_nr;
-		int chan_id_base;
+		int nr;
 		u64 context_base;
-	} *runl;
+	} chan;
 
 	/* context for accelerated drm-internal operations */
 	struct nouveau_channel *cechan;
 	struct nouveau_channel *channel;
 	struct nvkm_gpuobj *notify;
+	struct nouveau_fbdev *fbcon;
+	struct nvif_object nvsw;
 	struct nvif_object ntfy;
 
 	/* nv10-nv40 tiling regions */
@@ -198,8 +193,8 @@ struct nouveau_drm {
 	struct nvbios vbios;
 	struct nouveau_display *display;
 	struct work_struct hpd_work;
-	spinlock_t hpd_lock;
-	u32 hpd_pending;
+	struct work_struct fbcon_work;
+	int fbcon_new_state;
 #ifdef CONFIG_ACPI
 	struct notifier_block acpi_nb;
 #endif
@@ -216,12 +211,6 @@ struct nouveau_drm {
 	struct nouveau_svm *svm;
 
 	struct nouveau_dmem *dmem;
-
-	struct {
-		struct drm_audio_component *component;
-		struct mutex lock;
-		bool component_registered;
-	} audio;
 };
 
 static inline struct nouveau_drm *
@@ -259,11 +248,11 @@ void nouveau_drm_device_remove(struct drm_device *dev);
 #define NV_INFO(drm,f,a...) NV_PRINTK(info, &(drm)->client, f, ##a)
 
 #define NV_DEBUG(drm,f,a...) do {                                              \
-	if (drm_debug_enabled(DRM_UT_DRIVER))                                  \
+	if (unlikely(drm_debug & DRM_UT_DRIVER))                               \
 		NV_PRINTK(info, &(drm)->client, f, ##a);                       \
 } while(0)
 #define NV_ATOMIC(drm,f,a...) do {                                             \
-	if (drm_debug_enabled(DRM_UT_ATOMIC))                                  \
+	if (unlikely(drm_debug & DRM_UT_ATOMIC))                               \
 		NV_PRINTK(info, &(drm)->client, f, ##a);                       \
 } while(0)
 

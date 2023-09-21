@@ -1,11 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /*
- * Copyright (C) 2017 Texas Instruments Incorporated - https://www.ti.com/
+ * Copyright (C) 2017 Texas Instruments Incorporated - http://www.ti.com/
  */
 
-#include "dra74-ipu-dsp-common.dtsi"
 #include <dt-bindings/gpio/gpio.h>
-#include <dt-bindings/clock/ti-dra7-atl.h>
+#include <dt-bindings/clk/ti-dra7-atl.h>
 #include <dt-bindings/input/input.h>
 
 / {
@@ -135,7 +134,7 @@
 	status = "okay";
 
 	spi-max-frequency = <76800000>;
-	flash@0 {
+	m25p80@0 {
 		compatible = "s25fl256s1";
 		spi-max-frequency = <76800000>;
 		reg = <0>;
@@ -151,7 +150,7 @@
 		 */
 		partition@0 {
 			label = "QSPI.SPL";
-			reg = <0x00000000 0x00010000>;
+			reg = <0x00000000 0x000010000>;
 		};
 		partition@1 {
 			label = "QSPI.SPL.backup1";
@@ -243,6 +242,26 @@
 	>;
 	tx-num-evt = <32>;
 	rx-num-evt = <32>;
+};
+
+&mailbox5 {
+	status = "okay";
+	mbox_ipu1_ipc3x: mbox_ipu1_ipc3x {
+		status = "okay";
+	};
+	mbox_dsp1_ipc3x: mbox_dsp1_ipc3x {
+		status = "okay";
+	};
+};
+
+&mailbox6 {
+	status = "okay";
+	mbox_ipu2_ipc3x: mbox_ipu2_ipc3x {
+		status = "okay";
+	};
+	mbox_dsp2_ipc3x: mbox_dsp2_ipc3x {
+		status = "okay";
+	};
 };
 
 &pcie1_rc {

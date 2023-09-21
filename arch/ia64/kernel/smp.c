@@ -39,13 +39,14 @@
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/page.h>
+#include <asm/pgalloc.h>
+#include <asm/pgtable.h>
 #include <asm/processor.h>
 #include <asm/ptrace.h>
 #include <asm/sal.h>
 #include <asm/tlbflush.h>
 #include <asm/unistd.h>
 #include <asm/mca.h>
-#include <asm/xtp.h>
 
 /*
  * Note: alignment of 4 entries/cacheline was empirically determined
@@ -220,11 +221,11 @@ kdump_smp_send_init(void)
  * Called with preemption disabled.
  */
 void
-arch_smp_send_reschedule (int cpu)
+smp_send_reschedule (int cpu)
 {
 	ia64_send_ipi(cpu, IA64_IPI_RESCHEDULE, IA64_IPI_DM_INT, 0);
 }
-EXPORT_SYMBOL_GPL(arch_smp_send_reschedule);
+EXPORT_SYMBOL_GPL(smp_send_reschedule);
 
 /*
  * Called with preemption disabled.
@@ -332,4 +333,10 @@ void
 smp_send_stop (void)
 {
 	send_IPI_allbutself(IPI_CPU_STOP);
+}
+
+int
+setup_profiling_timer (unsigned int multiplier)
+{
+	return -EINVAL;
 }

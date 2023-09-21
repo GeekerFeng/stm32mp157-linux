@@ -19,7 +19,6 @@
 #include <linux/acpi.h>
 #include <linux/uaccess.h>
 #include <linux/miscdevice.h>
-#include <linux/fs.h>
 #include "acpi_thermal_rel.h"
 
 static acpi_handle acpi_thermal_rel_handle;
@@ -72,6 +71,7 @@ int acpi_parse_trt(acpi_handle handle, int *trt_count, struct trt **trtp,
 	int i;
 	int nr_bad_entries = 0;
 	struct trt *trts;
+	struct acpi_device *adev;
 	union acpi_object *p;
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
 	struct acpi_buffer element = { 0, NULL };
@@ -111,10 +111,12 @@ int acpi_parse_trt(acpi_handle handle, int *trt_count, struct trt **trtp,
 		if (!create_dev)
 			continue;
 
-		if (!acpi_fetch_acpi_dev(trt->source))
+		result = acpi_bus_get_device(trt->source, &adev);
+		if (result)
 			pr_warn("Failed to get source ACPI device\n");
 
-		if (!acpi_fetch_acpi_dev(trt->target))
+		result = acpi_bus_get_device(trt->target, &adev);
+		if (result)
 			pr_warn("Failed to get target ACPI device\n");
 	}
 
@@ -146,6 +148,7 @@ int acpi_parse_art(acpi_handle handle, int *art_count, struct art **artp,
 	int i;
 	int nr_bad_entries = 0;
 	struct art *arts;
+	struct acpi_device *adev;
 	union acpi_object *p;
 	struct acpi_buffer buffer = { ACPI_ALLOCATE_BUFFER, NULL };
 	struct acpi_buffer element = { 0, NULL };
@@ -187,11 +190,16 @@ int acpi_parse_art(acpi_handle handle, int *art_count, struct art **artp,
 		if (!create_dev)
 			continue;
 
-		if (!acpi_fetch_acpi_dev(art->source))
-			pr_warn("Failed to get source ACPI device\n");
-
-		if (!acpi_fetch_acpi_dev(art->target))
-			pr_warn("Failed to get target ACPI device\n");
+		if (art->source) {
+			result = acpi_bus_get_device(art->source, &adev);
+			if (result)
+				pr_warn("Failed to get source ACPI device\n");
+		}
+		if (art->target) {
+			result = acpi_bus_get_device(art->target, &adev);
+			if (result)
+				pr_warn("Failed to get target ACPI device\n");
+		}
 	}
 
 	*artp = arts;
@@ -241,9 +249,8 @@ static int fill_art(char __user *ubuf)
 		get_single_name(arts[i].source, art_user[i].source_device);
 		get_single_name(arts[i].target, art_user[i].target_device);
 		/* copy the rest int data in addition to source and target */
-		BUILD_BUG_ON(sizeof(art_user[i].data) !=
-			     sizeof(u64) * (ACPI_NR_ART_ELEMENTS - 2));
-		memcpy(&art_user[i].data, &arts[i].data, sizeof(art_user[i].data));
+		memcpy(&art_user[i].weight, &arts[i].weight,
+			sizeof(u64) * (ACPI_NR_ART_ELEMENTS - 2));
 	}
 
 	if (copy_to_user(ubuf, art_user, art_len))

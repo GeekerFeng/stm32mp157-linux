@@ -45,6 +45,7 @@ static int uniphier_regulator_probe(struct platform_device *pdev)
 	struct regulator_config config = { };
 	struct regulator_dev *rdev;
 	struct regmap *regmap;
+	struct resource *res;
 	void __iomem *base;
 	const char *name;
 	int i, ret, nr;
@@ -57,7 +58,8 @@ static int uniphier_regulator_probe(struct platform_device *pdev)
 	if (WARN_ON(!priv->data))
 		return -EINVAL;
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -199,20 +201,14 @@ static const struct of_device_id uniphier_regulator_match[] = {
 		.compatible = "socionext,uniphier-pxs3-usb3-regulator",
 		.data = &uniphier_pxs2_usb3_data,
 	},
-	{
-		.compatible = "socionext,uniphier-nx1-usb3-regulator",
-		.data = &uniphier_pxs2_usb3_data,
-	},
 	{ /* Sentinel */ },
 };
-MODULE_DEVICE_TABLE(of, uniphier_regulator_match);
 
 static struct platform_driver uniphier_regulator_driver = {
 	.probe = uniphier_regulator_probe,
 	.remove = uniphier_regulator_remove,
 	.driver = {
 		.name  = "uniphier-regulator",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = uniphier_regulator_match,
 	},
 };

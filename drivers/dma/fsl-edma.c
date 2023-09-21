@@ -17,7 +17,6 @@
 #include <linux/of_address.h>
 #include <linux/of_irq.h>
 #include <linux/of_dma.h>
-#include <linux/dma-mapping.h>
 
 #include "fsl-edma-common.h"
 
@@ -46,13 +45,6 @@ static irqreturn_t fsl_edma_tx_handler(int irq, void *dev_id)
 			fsl_chan = &fsl_edma->chans[ch];
 
 			spin_lock(&fsl_chan->vchan.lock);
-
-			if (!fsl_chan->edesc) {
-				/* terminate_all called before */
-				spin_unlock(&fsl_chan->vchan.lock);
-				continue;
-			}
-
 			if (!fsl_chan->edesc->iscyclic) {
 				list_del(&fsl_chan->edesc->vdesc.node);
 				vchan_cookie_complete(&fsl_chan->edesc->vdesc);
@@ -241,13 +233,6 @@ static struct fsl_edma_drvdata vf610_data = {
 	.setup_irq = fsl_edma_irq_init,
 };
 
-static struct fsl_edma_drvdata ls1028a_data = {
-	.version = v1,
-	.dmamuxs = DMAMUX_NR,
-	.mux_swap = true,
-	.setup_irq = fsl_edma_irq_init,
-};
-
 static struct fsl_edma_drvdata imx7ulp_data = {
 	.version = v3,
 	.dmamuxs = 1,
@@ -257,7 +242,6 @@ static struct fsl_edma_drvdata imx7ulp_data = {
 
 static const struct of_device_id fsl_edma_dt_ids[] = {
 	{ .compatible = "fsl,vf610-edma", .data = &vf610_data},
-	{ .compatible = "fsl,ls1028a-edma", .data = &ls1028a_data},
 	{ .compatible = "fsl,imx7ulp-edma", .data = &imx7ulp_data},
 	{ /* sentinel */ }
 };
@@ -272,6 +256,7 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	const struct fsl_edma_drvdata *drvdata = NULL;
 	struct fsl_edma_chan *fsl_chan;
 	struct edma_regs *regs;
+	struct resource *res;
 	int len, chans;
 	int ret, i;
 
@@ -297,7 +282,8 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	fsl_edma->n_chans = chans;
 	mutex_init(&fsl_edma->fsl_edma_mutex);
 
-	fsl_edma->membase = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	fsl_edma->membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(fsl_edma->membase))
 		return PTR_ERR(fsl_edma->membase);
 
@@ -321,8 +307,8 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	for (i = 0; i < fsl_edma->drvdata->dmamuxs; i++) {
 		char clkname[32];
 
-		fsl_edma->muxbase[i] = devm_platform_ioremap_resource(pdev,
-								      1 + i);
+		res = platform_get_resource(pdev, IORESOURCE_MEM, 1 + i);
+		fsl_edma->muxbase[i] = devm_ioremap_resource(&pdev->dev, res);
 		if (IS_ERR(fsl_edma->muxbase[i])) {
 			/* on error: disable all previously enabled clks */
 			fsl_disable_clocks(fsl_edma, i);
@@ -371,7 +357,6 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	dma_cap_set(DMA_PRIVATE, fsl_edma->dma_dev.cap_mask);
 	dma_cap_set(DMA_SLAVE, fsl_edma->dma_dev.cap_mask);
 	dma_cap_set(DMA_CYCLIC, fsl_edma->dma_dev.cap_mask);
-	dma_cap_set(DMA_MEMCPY, fsl_edma->dma_dev.cap_mask);
 
 	fsl_edma->dma_dev.dev = &pdev->dev;
 	fsl_edma->dma_dev.device_alloc_chan_resources
@@ -381,7 +366,6 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	fsl_edma->dma_dev.device_tx_status = fsl_edma_tx_status;
 	fsl_edma->dma_dev.device_prep_slave_sg = fsl_edma_prep_slave_sg;
 	fsl_edma->dma_dev.device_prep_dma_cyclic = fsl_edma_prep_dma_cyclic;
-	fsl_edma->dma_dev.device_prep_dma_memcpy = fsl_edma_prep_memcpy;
 	fsl_edma->dma_dev.device_config = fsl_edma_slave_config;
 	fsl_edma->dma_dev.device_pause = fsl_edma_pause;
 	fsl_edma->dma_dev.device_resume = fsl_edma_resume;
@@ -392,10 +376,6 @@ static int fsl_edma_probe(struct platform_device *pdev)
 	fsl_edma->dma_dev.src_addr_widths = FSL_EDMA_BUSWIDTHS;
 	fsl_edma->dma_dev.dst_addr_widths = FSL_EDMA_BUSWIDTHS;
 	fsl_edma->dma_dev.directions = BIT(DMA_DEV_TO_MEM) | BIT(DMA_MEM_TO_DEV);
-
-	fsl_edma->dma_dev.copy_align = DMAENGINE_ALIGN_32_BYTES;
-	/* Per worst case 'nbytes = 1' take CITER as the max_seg_size */
-	dma_set_max_seg_size(fsl_edma->dma_dev.dev, 0x3fff);
 
 	platform_set_drvdata(pdev, fsl_edma);
 

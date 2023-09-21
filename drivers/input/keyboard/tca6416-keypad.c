@@ -33,7 +33,7 @@ MODULE_DEVICE_TABLE(i2c, tca6416_id);
 
 struct tca6416_drv_data {
 	struct input_dev *input;
-	struct tca6416_button data[];
+	struct tca6416_button data[0];
 };
 
 struct tca6416_keypad_chip {
@@ -48,7 +48,7 @@ struct tca6416_keypad_chip {
 	int irqnum;
 	u16 pinmask;
 	bool use_polling;
-	struct tca6416_button buttons[];
+	struct tca6416_button buttons[0];
 };
 
 static int tca6416_write_reg(struct tca6416_keypad_chip *chip, int reg, u16 val)
@@ -194,9 +194,9 @@ static int tca6416_setup_registers(struct tca6416_keypad_chip *chip)
 	return 0;
 }
 
-static int tca6416_keypad_probe(struct i2c_client *client)
+static int tca6416_keypad_probe(struct i2c_client *client,
+				   const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct tca6416_keys_platform_data *pdata;
 	struct tca6416_keypad_chip *chip;
 	struct input_dev *input;
@@ -274,7 +274,7 @@ static int tca6416_keypad_probe(struct i2c_client *client)
 		error = request_threaded_irq(chip->irqnum, NULL,
 					     tca6416_keys_isr,
 					     IRQF_TRIGGER_FALLING |
-					     IRQF_ONESHOT | IRQF_NO_AUTOEN,
+						IRQF_ONESHOT,
 					     "tca6416-keypad", chip);
 		if (error) {
 			dev_dbg(&client->dev,
@@ -282,6 +282,7 @@ static int tca6416_keypad_probe(struct i2c_client *client)
 				chip->irqnum, error);
 			goto fail1;
 		}
+		disable_irq(chip->irqnum);
 	}
 
 	error = input_register_device(input);
@@ -307,7 +308,7 @@ fail1:
 	return error;
 }
 
-static void tca6416_keypad_remove(struct i2c_client *client)
+static int tca6416_keypad_remove(struct i2c_client *client)
 {
 	struct tca6416_keypad_chip *chip = i2c_get_clientdata(client);
 
@@ -318,8 +319,11 @@ static void tca6416_keypad_remove(struct i2c_client *client)
 
 	input_unregister_device(chip->input);
 	kfree(chip);
+
+	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int tca6416_keypad_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -341,16 +345,17 @@ static int tca6416_keypad_resume(struct device *dev)
 
 	return 0;
 }
+#endif
 
-static DEFINE_SIMPLE_DEV_PM_OPS(tca6416_keypad_dev_pm_ops,
-				tca6416_keypad_suspend, tca6416_keypad_resume);
+static SIMPLE_DEV_PM_OPS(tca6416_keypad_dev_pm_ops,
+			 tca6416_keypad_suspend, tca6416_keypad_resume);
 
 static struct i2c_driver tca6416_keypad_driver = {
 	.driver = {
 		.name	= "tca6416-keypad",
-		.pm	= pm_sleep_ptr(&tca6416_keypad_dev_pm_ops),
+		.pm	= &tca6416_keypad_dev_pm_ops,
 	},
-	.probe_new	= tca6416_keypad_probe,
+	.probe		= tca6416_keypad_probe,
 	.remove		= tca6416_keypad_remove,
 	.id_table	= tca6416_id,
 };
@@ -369,5 +374,5 @@ static void __exit tca6416_keypad_exit(void)
 module_exit(tca6416_keypad_exit);
 
 MODULE_AUTHOR("Sriramakrishnan <srk@ti.com>");
-MODULE_DESCRIPTION("Keypad driver over tca6416 IO expander");
+MODULE_DESCRIPTION("Keypad driver over tca6146 IO expander");
 MODULE_LICENSE("GPL");

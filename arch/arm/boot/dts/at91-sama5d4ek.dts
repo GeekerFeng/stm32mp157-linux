@@ -16,7 +16,7 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	memory@20000000 {
+	memory {
 		reg = <0x20000000 0x20000000>;
 	};
 
@@ -65,7 +65,7 @@
 			spi0: spi@f8010000 {
 				cs-gpios = <&pioC 3 0>, <0>, <0>, <0>;
 				status = "okay";
-				flash@0 {
+				m25p80@0 {
 					compatible = "atmel,at25df321a";
 					spi-max-frequency = <50000000>;
 					reg = <0>;
@@ -269,13 +269,13 @@
 		};
 	};
 
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
 
 		pinctrl-names = "default";
 		pinctrl-0 = <&pinctrl_key_gpio>;
 
-		button {
+		pb_user1 {
 			label = "pb_user1";
 			gpios = <&pioE 13 GPIO_ACTIVE_HIGH>;
 			linux,code = <0x100>;
@@ -287,18 +287,18 @@
 		compatible = "gpio-leds";
 		status = "okay";
 
-		led-d8 {
+		d8 {
 			label = "d8";
 			/* PE28, conflicts with usart4 rts pin */
 			gpios = <&pioE 28 GPIO_ACTIVE_LOW>;
 		};
 
-		led-d9 {
+		d9 {
 			label = "d9";
 			gpios = <&pioE 9 GPIO_ACTIVE_HIGH>;
 		};
 
-		led-d10 {
+		d10 {
 			label = "d10";
 			gpios = <&pioE 8 GPIO_ACTIVE_LOW>;
 			linux,default-trigger = "heartbeat";

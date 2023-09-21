@@ -11,7 +11,6 @@
 #include <linux/pci.h>
 #include <linux/delay.h>
 
-#include "amdgpu.h"
 #include "amd_acpi.h"
 
 #define AMDGPU_PX_QUIRK_FORCE_ATPX  (1 << 0)
@@ -166,7 +165,7 @@ static void amdgpu_atpx_parse_functions(struct amdgpu_atpx_functions *f, u32 mas
 }
 
 /**
- * amdgpu_atpx_validate - validate ATPX functions
+ * amdgpu_atpx_validate_functions - validate ATPX functions
  *
  * @atpx: amdgpu atpx struct
  *
@@ -617,7 +616,7 @@ static bool amdgpu_atpx_detect(void)
 	while ((pdev = pci_get_class(PCI_CLASS_DISPLAY_VGA << 8, pdev)) != NULL) {
 		vga_count++;
 
-		has_atpx |= amdgpu_atpx_pci_probe_handle(pdev);
+		has_atpx |= (amdgpu_atpx_pci_probe_handle(pdev) == true);
 
 		parent_pdev = pci_upstream_bridge(pdev);
 		d3_supported |= parent_pdev && parent_pdev->bridge_d3;
@@ -627,7 +626,7 @@ static bool amdgpu_atpx_detect(void)
 	while ((pdev = pci_get_class(PCI_CLASS_DISPLAY_OTHER << 8, pdev)) != NULL) {
 		vga_count++;
 
-		has_atpx |= amdgpu_atpx_pci_probe_handle(pdev);
+		has_atpx |= (amdgpu_atpx_pci_probe_handle(pdev) == true);
 
 		parent_pdev = pci_upstream_bridge(pdev);
 		d3_supported |= parent_pdev && parent_pdev->bridge_d3;

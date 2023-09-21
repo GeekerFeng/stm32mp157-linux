@@ -2,16 +2,16 @@
 /*
  * Copyright (c) 2019, Linaro Ltd
  */
+#include <dt-bindings/power/qcom-aoss-qmp.h>
 #include <linux/clk-provider.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
 #include <linux/mailbox_client.h>
 #include <linux/module.h>
-#include <linux/of_platform.h>
 #include <linux/platform_device.h>
+#include <linux/pm_domain.h>
 #include <linux/thermal.h>
 #include <linux/slab.h>
-#include <linux/soc/qcom/qcom_aoss.h>
 
 #define QMP_DESC_MAGIC			0x0
 #define QMP_DESC_VERSION		0x4
@@ -44,7 +44,7 @@
 
 #define QMP_NUM_COOLING_RESOURCES	2
 
-static bool qmp_cdev_max_state = 1;
+static bool qmp_cdev_init_state = 1;
 
 struct qmp_cooling_device {
 	struct thermal_cooling_device *cdev;
@@ -64,7 +64,7 @@ struct qmp_cooling_device {
  * @event: wait_queue for synchronization with the IRQ
  * @tx_lock: provides synchronization between multiple callers of qmp_send()
  * @qdss_clk: QDSS clock hw struct
- * @cooling_devs: thermal cooling devices
+ * @pd_data: genpd data
  */
 struct qmp {
 	void __iomem *msgram;
@@ -81,8 +81,16 @@ struct qmp {
 	struct mutex tx_lock;
 
 	struct clk_hw qdss_clk;
+	struct genpd_onecell_data pd_data;
 	struct qmp_cooling_device *cooling_devs;
 };
+
+struct qmp_pd {
+	struct qmp *qmp;
+	struct generic_pm_domain pd;
+};
+
+#define to_qmp_pd_resource(res) container_of(res, struct qmp_pd, pd)
 
 static void qmp_kick(struct qmp *qmp)
 {
@@ -192,7 +200,7 @@ static irqreturn_t qmp_intr(int irq, void *data)
 {
 	struct qmp *qmp = data;
 
-	wake_up_all(&qmp->event);
+	wake_up_interruptible_all(&qmp->event);
 
 	return IRQ_HANDLED;
 }
@@ -214,13 +222,10 @@ static bool qmp_message_empty(struct qmp *qmp)
  *
  * Return: 0 on success, negative errno on failure
  */
-int qmp_send(struct qmp *qmp, const void *data, size_t len)
+static int qmp_send(struct qmp *qmp, const void *data, size_t len)
 {
 	long time_left;
 	int ret;
-
-	if (WARN_ON(IS_ERR_OR_NULL(qmp) || !data))
-		return -EINVAL;
 
 	if (WARN_ON(len + sizeof(u32) > qmp->size))
 		return -EINVAL;
@@ -234,9 +239,6 @@ int qmp_send(struct qmp *qmp, const void *data, size_t len)
 	__iowrite32_copy(qmp->msgram + qmp->offset + sizeof(u32),
 			 data, len / sizeof(u32));
 	writel(len, qmp->msgram + qmp->offset);
-
-	/* Read back len to confirm data written in message RAM */
-	readl(qmp->msgram + qmp->offset);
 	qmp_kick(qmp);
 
 	time_left = wait_event_interruptible_timeout(qmp->event,
@@ -255,7 +257,6 @@ int qmp_send(struct qmp *qmp, const void *data, size_t len)
 
 	return ret;
 }
-EXPORT_SYMBOL(qmp_send);
 
 static int qmp_qdss_clk_prepare(struct clk_hw *hw)
 {
@@ -309,10 +310,99 @@ static void qmp_qdss_clk_remove(struct qmp *qmp)
 	clk_hw_unregister(&qmp->qdss_clk);
 }
 
+static int qmp_pd_power_toggle(struct qmp_pd *res, bool enable)
+{
+	char buf[QMP_MSG_LEN] = {};
+
+	snprintf(buf, sizeof(buf),
+		 "{class: image, res: load_state, name: %s, val: %s}",
+		 res->pd.name, enable ? "on" : "off");
+	return qmp_send(res->qmp, buf, sizeof(buf));
+}
+
+static int qmp_pd_power_on(struct generic_pm_domain *domain)
+{
+	return qmp_pd_power_toggle(to_qmp_pd_resource(domain), true);
+}
+
+static int qmp_pd_power_off(struct generic_pm_domain *domain)
+{
+	return qmp_pd_power_toggle(to_qmp_pd_resource(domain), false);
+}
+
+static const char * const sdm845_resources[] = {
+	[AOSS_QMP_LS_CDSP] = "cdsp",
+	[AOSS_QMP_LS_LPASS] = "adsp",
+	[AOSS_QMP_LS_MODEM] = "modem",
+	[AOSS_QMP_LS_SLPI] = "slpi",
+	[AOSS_QMP_LS_SPSS] = "spss",
+	[AOSS_QMP_LS_VENUS] = "venus",
+};
+
+static int qmp_pd_add(struct qmp *qmp)
+{
+	struct genpd_onecell_data *data = &qmp->pd_data;
+	struct device *dev = qmp->dev;
+	struct qmp_pd *res;
+	size_t num = ARRAY_SIZE(sdm845_resources);
+	int ret;
+	int i;
+
+	res = devm_kcalloc(dev, num, sizeof(*res), GFP_KERNEL);
+	if (!res)
+		return -ENOMEM;
+
+	data->domains = devm_kcalloc(dev, num, sizeof(*data->domains),
+				     GFP_KERNEL);
+	if (!data->domains)
+		return -ENOMEM;
+
+	for (i = 0; i < num; i++) {
+		res[i].qmp = qmp;
+		res[i].pd.name = sdm845_resources[i];
+		res[i].pd.power_on = qmp_pd_power_on;
+		res[i].pd.power_off = qmp_pd_power_off;
+
+		ret = pm_genpd_init(&res[i].pd, NULL, true);
+		if (ret < 0) {
+			dev_err(dev, "failed to init genpd\n");
+			goto unroll_genpds;
+		}
+
+		data->domains[i] = &res[i].pd;
+	}
+
+	data->num_domains = i;
+
+	ret = of_genpd_add_provider_onecell(dev->of_node, data);
+	if (ret < 0)
+		goto unroll_genpds;
+
+	return 0;
+
+unroll_genpds:
+	for (i--; i >= 0; i--)
+		pm_genpd_remove(data->domains[i]);
+
+	return ret;
+}
+
+static void qmp_pd_remove(struct qmp *qmp)
+{
+	struct genpd_onecell_data *data = &qmp->pd_data;
+	struct device *dev = qmp->dev;
+	int i;
+
+	of_genpd_del_provider(dev->of_node);
+
+	for (i = 0; i < data->num_domains; i++)
+		pm_genpd_remove(data->domains[i]);
+}
+
 static int qmp_cdev_get_max_state(struct thermal_cooling_device *cdev,
 				  unsigned long *state)
 {
-	*state = qmp_cdev_max_state;
+	*state = qmp_cdev_init_state;
 	return 0;
 }
 
@@ -342,7 +432,7 @@ static int qmp_cdev_set_cur_state(struct thermal_cooling_device *cdev,
 	snprintf(buf, sizeof(buf),
 		 "{class: volt_flr, event:zero_temp, res:%s, value:%s}",
 			qmp_cdev->name,
-			cdev_state ? "on" : "off");
+			cdev_state ? "off" : "on");
 
 	ret = qmp_send(qmp_cdev->qmp, buf, sizeof(buf));
 
@@ -352,7 +442,7 @@ static int qmp_cdev_set_cur_state(struct thermal_cooling_device *cdev,
 	return ret;
 }
 
-static const struct thermal_cooling_device_ops qmp_cooling_device_ops = {
+static struct thermal_cooling_device_ops qmp_cooling_device_ops = {
 	.get_max_state = qmp_cdev_get_max_state,
 	.get_cur_state = qmp_cdev_get_cur_state,
 	.set_cur_state = qmp_cdev_set_cur_state,
@@ -365,7 +455,7 @@ static int qmp_cooling_device_add(struct qmp *qmp,
 	char *cdev_name = (char *)node->name;
 
 	qmp_cdev->qmp = qmp;
-	qmp_cdev->state = !qmp_cdev_max_state;
+	qmp_cdev->state = qmp_cdev_init_state;
 	qmp_cdev->name = cdev_name;
 	qmp_cdev->cdev = devm_thermal_of_cooling_device_register
 				(qmp->dev, node,
@@ -382,12 +472,12 @@ static int qmp_cooling_device_add(struct qmp *qmp,
 static int qmp_cooling_devices_register(struct qmp *qmp)
 {
 	struct device_node *np, *child;
-	int count = 0;
+	int count = QMP_NUM_COOLING_RESOURCES;
 	int ret;
 
 	np = qmp->dev->of_node;
 
-	qmp->cooling_devs = devm_kcalloc(qmp->dev, QMP_NUM_COOLING_RESOURCES,
+	qmp->cooling_devs = devm_kcalloc(qmp->dev, count,
 					 sizeof(*qmp->cooling_devs),
 					 GFP_KERNEL);
 
@@ -395,18 +485,13 @@ static int qmp_cooling_devices_register(struct qmp *qmp)
 		return -ENOMEM;
 
 	for_each_available_child_of_node(np, child) {
-		if (!of_property_present(child, "#cooling-cells"))
+		if (!of_find_property(child, "#cooling-cells", NULL))
 			continue;
 		ret = qmp_cooling_device_add(qmp, &qmp->cooling_devs[count++],
 					     child);
-		if (ret) {
-			of_node_put(child);
+		if (ret)
 			goto unroll;
-		}
 	}
-
-	if (!count)
-		devm_kfree(qmp->dev, qmp->cooling_devs);
 
 	return 0;
 
@@ -414,7 +499,6 @@ unroll:
 	while (--count >= 0)
 		thermal_cooling_device_unregister
 			(qmp->cooling_devs[count].cdev);
-	devm_kfree(qmp->dev, qmp->cooling_devs);
 
 	return ret;
 }
@@ -427,57 +511,9 @@ static void qmp_cooling_devices_remove(struct qmp *qmp)
 		thermal_cooling_device_unregister(qmp->cooling_devs[i].cdev);
 }
 
-/**
- * qmp_get() - get a qmp handle from a device
- * @dev: client device pointer
- *
- * Return: handle to qmp device on success, ERR_PTR() on failure
- */
-struct qmp *qmp_get(struct device *dev)
-{
-	struct platform_device *pdev;
-	struct device_node *np;
-	struct qmp *qmp;
-
-	if (!dev || !dev->of_node)
-		return ERR_PTR(-EINVAL);
-
-	np = of_parse_phandle(dev->of_node, "qcom,qmp", 0);
-	if (!np)
-		return ERR_PTR(-ENODEV);
-
-	pdev = of_find_device_by_node(np);
-	of_node_put(np);
-	if (!pdev)
-		return ERR_PTR(-EINVAL);
-
-	qmp = platform_get_drvdata(pdev);
-
-	if (!qmp) {
-		put_device(&pdev->dev);
-		return ERR_PTR(-EPROBE_DEFER);
-	}
-	return qmp;
-}
-EXPORT_SYMBOL(qmp_get);
-
-/**
- * qmp_put() - release a qmp handle
- * @qmp: qmp handle obtained from qmp_get()
- */
-void qmp_put(struct qmp *qmp)
-{
-	/*
-	 * Match get_device() inside of_find_device_by_node() in
-	 * qmp_get()
-	 */
-	if (!IS_ERR_OR_NULL(qmp))
-		put_device(qmp->dev);
-}
-EXPORT_SYMBOL(qmp_put);
-
 static int qmp_probe(struct platform_device *pdev)
 {
+	struct resource *res;
 	struct qmp *qmp;
 	int irq;
 	int ret;
@@ -490,7 +526,8 @@ static int qmp_probe(struct platform_device *pdev)
 	init_waitqueue_head(&qmp->event);
 	mutex_init(&qmp->tx_lock);
 
-	qmp->msgram = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	qmp->msgram = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(qmp->msgram))
 		return PTR_ERR(qmp->msgram);
 
@@ -503,7 +540,7 @@ static int qmp_probe(struct platform_device *pdev)
 	}
 
 	irq = platform_get_irq(pdev, 0);
-	ret = devm_request_irq(&pdev->dev, irq, qmp_intr, 0,
+	ret = devm_request_irq(&pdev->dev, irq, qmp_intr, IRQF_ONESHOT,
 			       "aoss-qmp", qmp);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "failed to request interrupt\n");
@@ -518,6 +555,10 @@ static int qmp_probe(struct platform_device *pdev)
 	if (ret)
 		goto err_close_qmp;
 
+	ret = qmp_pd_add(qmp);
+	if (ret)
+		goto err_remove_qdss_clk;
+
 	ret = qmp_cooling_devices_register(qmp);
 	if (ret)
 		dev_err(&pdev->dev, "failed to register aoss cooling devices\n");
@@ -526,6 +567,8 @@ static int qmp_probe(struct platform_device *pdev)
 
 	return 0;
 
+err_remove_qdss_clk:
+	qmp_qdss_clk_remove(qmp);
 err_close_qmp:
 	qmp_close(qmp);
 err_free_mbox:
@@ -539,6 +582,7 @@ static int qmp_remove(struct platform_device *pdev)
 	struct qmp *qmp = platform_get_drvdata(pdev);
 
 	qmp_qdss_clk_remove(qmp);
+	qmp_pd_remove(qmp);
 	qmp_cooling_devices_remove(qmp);
 
 	qmp_close(qmp);
@@ -549,12 +593,8 @@ static int qmp_remove(struct platform_device *pdev)
 
 static const struct of_device_id qmp_dt_match[] = {
 	{ .compatible = "qcom,sc7180-aoss-qmp", },
-	{ .compatible = "qcom,sc7280-aoss-qmp", },
 	{ .compatible = "qcom,sdm845-aoss-qmp", },
 	{ .compatible = "qcom,sm8150-aoss-qmp", },
-	{ .compatible = "qcom,sm8250-aoss-qmp", },
-	{ .compatible = "qcom,sm8350-aoss-qmp", },
-	{ .compatible = "qcom,aoss-qmp", },
 	{}
 };
 MODULE_DEVICE_TABLE(of, qmp_dt_match);
@@ -563,7 +603,6 @@ static struct platform_driver qmp_driver = {
 	.driver = {
 		.name		= "qcom_aoss_qmp",
 		.of_match_table	= qmp_dt_match,
-		.suppress_bind_attrs = true,
 	},
 	.probe = qmp_probe,
 	.remove	= qmp_remove,

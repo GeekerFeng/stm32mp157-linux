@@ -19,21 +19,21 @@
 
 #include <api/fs/fs.h>
 
-int thread__init_maps(struct thread *thread, struct machine *machine)
+int thread__init_map_groups(struct thread *thread, struct machine *machine)
 {
 	pid_t pid = thread->pid_;
 
 	if (pid == thread->tid || pid == -1) {
-		thread->maps = maps__new(machine);
+		thread->mg = map_groups__new(machine);
 	} else {
 		struct thread *leader = __machine__findnew_thread(machine, pid, pid);
 		if (leader) {
-			thread->maps = maps__get(leader->maps);
+			thread->mg = map_groups__get(leader->mg);
 			thread__put(leader);
 		}
 	}
 
-	return thread->maps ? 0 : -1;
+	return thread->mg ? 0 : -1;
 }
 
 struct thread *thread__new(pid_t pid, pid_t tid)
@@ -47,8 +47,6 @@ struct thread *thread__new(pid_t pid, pid_t tid)
 		thread->tid = tid;
 		thread->ppid = -1;
 		thread->cpu = -1;
-		thread->guest_cpu = -1;
-		thread->lbr_stitch_enable = false;
 		INIT_LIST_HEAD(&thread->namespaces_list);
 		INIT_LIST_HEAD(&thread->comm_list);
 		init_rwsem(&thread->namespaces_lock);
@@ -88,9 +86,9 @@ void thread__delete(struct thread *thread)
 
 	thread_stack__free(thread);
 
-	if (thread->maps) {
-		maps__put(thread->maps);
-		thread->maps = NULL;
+	if (thread->mg) {
+		map_groups__put(thread->mg);
+		thread->mg = NULL;
 	}
 	down_write(&thread->namespaces_lock);
 	list_for_each_entry_safe(namespaces, tmp_namespaces,
@@ -112,7 +110,6 @@ void thread__delete(struct thread *thread)
 
 	exit_rwsem(&thread->namespaces_lock);
 	exit_rwsem(&thread->comm_lock);
-	thread__free_stitch_list(thread);
 	free(thread);
 }
 
@@ -254,7 +251,7 @@ static int ____thread__set_comm(struct thread *thread, const char *str,
 		list_add(&new->list, &thread->comm_list);
 
 		if (exec)
-			unwind__flush_access(thread->maps);
+			unwind__flush_access(thread->mg);
 	}
 
 	thread->comm_set = true;
@@ -311,66 +308,55 @@ const char *thread__comm_str(struct thread *thread)
 	return str;
 }
 
-static int __thread__comm_len(struct thread *thread, const char *comm)
-{
-	if (!comm)
-		return 0;
-	thread->comm_len = strlen(comm);
-
-	return thread->comm_len;
-}
-
 /* CHECKME: it should probably better return the max comm len from its comm list */
 int thread__comm_len(struct thread *thread)
 {
-	int comm_len = thread->comm_len;
-
-	if (!comm_len) {
-		const char *comm;
-
-		down_read(&thread->comm_lock);
-		comm = __thread__comm_str(thread);
-		comm_len = __thread__comm_len(thread, comm);
-		up_read(&thread->comm_lock);
+	if (!thread->comm_len) {
+		const char *comm = thread__comm_str(thread);
+		if (!comm)
+			return 0;
+		thread->comm_len = strlen(comm);
 	}
 
-	return comm_len;
+	return thread->comm_len;
 }
 
 size_t thread__fprintf(struct thread *thread, FILE *fp)
 {
 	return fprintf(fp, "Thread %d %s\n", thread->tid, thread__comm_str(thread)) +
-	       maps__fprintf(thread->maps, fp);
+	       map_groups__fprintf(thread->mg, fp);
 }
 
 int thread__insert_map(struct thread *thread, struct map *map)
 {
 	int ret;
 
-	ret = unwind__prepare_access(thread->maps, map, NULL);
+	ret = unwind__prepare_access(thread->mg, map, NULL);
 	if (ret)
 		return ret;
 
-	maps__fixup_overlappings(thread->maps, map, stderr);
-	return maps__insert(thread->maps, map);
+	map_groups__fixup_overlappings(thread->mg, map, stderr);
+	map_groups__insert(thread->mg, map);
+
+	return 0;
 }
 
 static int __thread__prepare_access(struct thread *thread)
 {
 	bool initialized = false;
 	int err = 0;
-	struct maps *maps = thread->maps;
-	struct map_rb_node *rb_node;
+	struct maps *maps = &thread->mg->maps;
+	struct map *map;
 
-	down_read(maps__lock(maps));
+	down_read(&maps->lock);
 
-	maps__for_each_entry(maps, rb_node) {
-		err = unwind__prepare_access(thread->maps, rb_node->map, &initialized);
+	for (map = maps__first(maps); map; map = map__next(map)) {
+		err = unwind__prepare_access(thread->mg, map, &initialized);
 		if (err || initialized)
 			break;
 	}
 
-	up_read(maps__lock(maps));
+	up_read(&maps->lock);
 
 	return err;
 }
@@ -385,19 +371,21 @@ static int thread__prepare_access(struct thread *thread)
 	return err;
 }
 
-static int thread__clone_maps(struct thread *thread, struct thread *parent, bool do_maps_clone)
+static int thread__clone_map_groups(struct thread *thread,
+				    struct thread *parent,
+				    bool do_maps_clone)
 {
 	/* This is new thread, we share map groups for process. */
 	if (thread->pid_ == parent->pid_)
 		return thread__prepare_access(thread);
 
-	if (thread->maps == parent->maps) {
+	if (thread->mg == parent->mg) {
 		pr_debug("broken map groups on thread %d/%d parent %d/%d\n",
 			 thread->pid_, thread->tid, parent->pid_, parent->tid);
 		return 0;
 	}
 	/* But this one is new process, copy maps. */
-	return do_maps_clone ? maps__clone(thread, parent->maps) : 0;
+	return do_maps_clone ? map_groups__clone(thread, parent->mg) : 0;
 }
 
 int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp, bool do_maps_clone)
@@ -413,7 +401,7 @@ int thread__fork(struct thread *thread, struct thread *parent, u64 timestamp, bo
 	}
 
 	thread->ppid = parent->tid;
-	return thread__clone_maps(thread, parent, do_maps_clone);
+	return thread__clone_map_groups(thread, parent, do_maps_clone);
 }
 
 void thread__find_cpumode_addr_location(struct thread *thread, u64 addr,
@@ -448,47 +436,21 @@ struct thread *thread__main_thread(struct machine *machine, struct thread *threa
 int thread__memcpy(struct thread *thread, struct machine *machine,
 		   void *buf, u64 ip, int len, bool *is64bit)
 {
-	u8 cpumode = PERF_RECORD_MISC_USER;
-	struct addr_location al;
-	struct dso *dso;
-	long offset;
+       u8 cpumode = PERF_RECORD_MISC_USER;
+       struct addr_location al;
+       long offset;
 
-	if (machine__kernel_ip(machine, ip))
-		cpumode = PERF_RECORD_MISC_KERNEL;
+       if (machine__kernel_ip(machine, ip))
+               cpumode = PERF_RECORD_MISC_KERNEL;
 
-	if (!thread__find_map(thread, cpumode, ip, &al))
-	       return -1;
+       if (!thread__find_map(thread, cpumode, ip, &al) || !al.map->dso ||
+	   al.map->dso->data.status == DSO_DATA_STATUS_ERROR ||
+	   map__load(al.map) < 0)
+               return -1;
 
-	dso = map__dso(al.map);
+       offset = al.map->map_ip(al.map, ip);
+       if (is64bit)
+               *is64bit = al.map->dso->is_64_bit;
 
-	if( !dso || dso->data.status == DSO_DATA_STATUS_ERROR || map__load(al.map) < 0)
-		return -1;
-
-	offset = map__map_ip(al.map, ip);
-	if (is64bit)
-		*is64bit = dso->is_64_bit;
-
-	return dso__data_read_offset(dso, machine, offset, buf, len);
-}
-
-void thread__free_stitch_list(struct thread *thread)
-{
-	struct lbr_stitch *lbr_stitch = thread->lbr_stitch;
-	struct stitch_list *pos, *tmp;
-
-	if (!lbr_stitch)
-		return;
-
-	list_for_each_entry_safe(pos, tmp, &lbr_stitch->lists, node) {
-		list_del_init(&pos->node);
-		free(pos);
-	}
-
-	list_for_each_entry_safe(pos, tmp, &lbr_stitch->free_lists, node) {
-		list_del_init(&pos->node);
-		free(pos);
-	}
-
-	zfree(&lbr_stitch->prev_lbr_cursor);
-	zfree(&thread->lbr_stitch);
+       return dso__data_read_offset(al.map->dso, machine, offset, buf, len);
 }

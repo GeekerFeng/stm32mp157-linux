@@ -197,21 +197,18 @@ static bool vec_is_stale(struct aa_profile **vec, int n)
 	return false;
 }
 
-static long accum_vec_flags(struct aa_profile **vec, int n)
+static bool vec_unconfined(struct aa_profile **vec, int n)
 {
-	long u = FLAG_UNCONFINED;
 	int i;
 
 	AA_BUG(!vec);
 
 	for (i = 0; i < n; i++) {
-		u |= vec[i]->label.flags & (FLAG_DEBUG1 | FLAG_DEBUG2 |
-					    FLAG_STALE);
-		if (!(u & vec[i]->label.flags & FLAG_UNCONFINED))
-			u &= ~FLAG_UNCONFINED;
+		if (!profile_unconfined(vec[i]))
+			return false;
 	}
 
-	return u;
+	return true;
 }
 
 static int sort_cmp(const void *a, const void *b)
@@ -312,8 +309,10 @@ out:
 }
 
 
-void aa_label_destroy(struct aa_label *label)
+static void label_destroy(struct aa_label *label)
 {
+	struct aa_label *tmp;
+
 	AA_BUG(!label);
 
 	if (!label_isprofile(label)) {
@@ -329,13 +328,16 @@ void aa_label_destroy(struct aa_label *label)
 		}
 	}
 
-	if (label->proxy) {
-		if (rcu_dereference_protected(label->proxy->label, true) == label)
-			rcu_assign_pointer(label->proxy->label, NULL);
-		aa_put_proxy(label->proxy);
-	}
+	if (rcu_dereference_protected(label->proxy->label, true) == label)
+		rcu_assign_pointer(label->proxy->label, NULL);
+
 	aa_free_secid(label->secid);
 
+	tmp = rcu_dereference_protected(label->proxy->label, true);
+	if (tmp == label)
+		rcu_assign_pointer(label->proxy->label, NULL);
+
+	aa_put_proxy(label->proxy);
 	label->proxy = (struct aa_proxy *) PROXY_POISON + 1;
 }
 
@@ -344,7 +346,7 @@ void aa_label_free(struct aa_label *label)
 	if (!label)
 		return;
 
-	aa_label_destroy(label);
+	label_destroy(label);
 	kfree(label);
 }
 
@@ -428,7 +430,8 @@ struct aa_label *aa_label_alloc(int size, struct aa_proxy *proxy, gfp_t gfp)
 	AA_BUG(size < 1);
 
 	/*  + 1 for null terminator entry on vec */
-	new = kzalloc(struct_size(new, vec, size + 1), gfp);
+	new = kzalloc(sizeof(*new) + sizeof(struct aa_profile *) * (size + 1),
+			gfp);
 	AA_DEBUG("%s (%p)\n", __func__, new);
 	if (!new)
 		goto fail;
@@ -488,7 +491,7 @@ int aa_label_next_confined(struct aa_label *label, int i)
 }
 
 /**
- * __aa_label_next_not_in_set - return the next profile of @sub not in @set
+ * aa_label_next_not_in_set - return the next profile of @sub not in @set
  * @I: label iterator
  * @set: label to test against
  * @sub: label to if is subset of @set
@@ -547,39 +550,6 @@ bool aa_label_is_subset(struct aa_label *set, struct aa_label *sub)
 	return __aa_label_next_not_in_set(&i, set, sub) == NULL;
 }
 
-/**
- * aa_label_is_unconfined_subset - test if @sub is a subset of @set
- * @set: label to test against
- * @sub: label to test if is subset of @set
- *
- * This checks for subset but taking into account unconfined. IF
- * @sub contains an unconfined profile that does not have a matching
- * unconfined in @set then this will not cause the test to fail.
- * Conversely we don't care about an unconfined in @set that is not in
- * @sub
- *
- * Returns: true if @sub is special_subset of @set
- *     else false
- */
-bool aa_label_is_unconfined_subset(struct aa_label *set, struct aa_label *sub)
-{
-	struct label_it i = { };
-	struct aa_profile *p;
-
-	AA_BUG(!set);
-	AA_BUG(!sub);
-
-	if (sub == set)
-		return true;
-
-	do {
-		p = __aa_label_next_not_in_set(&i, set, sub);
-		if (p && !profile_unconfined(p))
-			break;
-	} while (p);
-
-	return p == NULL;
-}
 
 
 /**
@@ -1100,7 +1070,8 @@ static struct aa_label *label_merge_insert(struct aa_label *new,
 		else if (k == b->size)
 			return aa_get_label(b);
 	}
-	new->flags |= accum_vec_flags(new->vec, new->size);
+	if (vec_unconfined(new->vec, new->size))
+		new->flags |= FLAG_UNCONFINED;
 	ls = labels_set(new);
 	write_lock_irqsave(&ls->lock, flags);
 	label = __label_insert(labels_set(new), new, false);
@@ -1256,27 +1227,32 @@ out:
 	return label;
 }
 
+static inline bool label_is_visible(struct aa_profile *profile,
+				    struct aa_label *label)
+{
+	return aa_ns_visible(profile->ns, labels_ns(label), true);
+}
+
 /* match a profile and its associated ns component if needed
  * Assumes visibility test has already been done.
  * If a subns profile is not to be matched should be prescreened with
  * visibility test.
  */
-static inline aa_state_t match_component(struct aa_profile *profile,
-					 struct aa_ruleset *rules,
-					 struct aa_profile *tp,
-					 aa_state_t state)
+static inline unsigned int match_component(struct aa_profile *profile,
+					   struct aa_profile *tp,
+					   unsigned int state)
 {
 	const char *ns_name;
 
 	if (profile->ns == tp->ns)
-		return aa_dfa_match(rules->policy.dfa, state, tp->base.hname);
+		return aa_dfa_match(profile->policy.dfa, state, tp->base.hname);
 
 	/* try matching with namespace name and then profile */
 	ns_name = aa_ns_name(profile->ns, tp->ns, true);
-	state = aa_dfa_match_len(rules->policy.dfa, state, ":", 1);
-	state = aa_dfa_match(rules->policy.dfa, state, ns_name);
-	state = aa_dfa_match_len(rules->policy.dfa, state, ":", 1);
-	return aa_dfa_match(rules->policy.dfa, state, tp->base.hname);
+	state = aa_dfa_match_len(profile->policy.dfa, state, ":", 1);
+	state = aa_dfa_match(profile->policy.dfa, state, ns_name);
+	state = aa_dfa_match_len(profile->policy.dfa, state, ":", 1);
+	return aa_dfa_match(profile->policy.dfa, state, tp->base.hname);
 }
 
 /**
@@ -1295,9 +1271,8 @@ static inline aa_state_t match_component(struct aa_profile *profile,
  *        check to be stacked.
  */
 static int label_compound_match(struct aa_profile *profile,
-				struct aa_ruleset *rules,
 				struct aa_label *label,
-				aa_state_t state, bool subns, u32 request,
+				unsigned int state, bool subns, u32 request,
 				struct aa_perms *perms)
 {
 	struct aa_profile *tp;
@@ -1307,7 +1282,7 @@ static int label_compound_match(struct aa_profile *profile,
 	label_for_each(i, label, tp) {
 		if (!aa_ns_visible(profile->ns, tp->ns, subns))
 			continue;
-		state = match_component(profile, rules, tp, state);
+		state = match_component(profile, tp, state);
 		if (!state)
 			goto fail;
 		goto next;
@@ -1321,12 +1296,12 @@ next:
 	label_for_each_cont(i, label, tp) {
 		if (!aa_ns_visible(profile->ns, tp->ns, subns))
 			continue;
-		state = aa_dfa_match(rules->policy.dfa, state, "//&");
-		state = match_component(profile, rules, tp, state);
+		state = aa_dfa_match(profile->policy.dfa, state, "//&");
+		state = match_component(profile, tp, state);
 		if (!state)
 			goto fail;
 	}
-	*perms = *aa_lookup_perms(&rules->policy, state);
+	aa_compute_perms(profile->policy.dfa, state, perms);
 	aa_apply_modes_to_perms(profile, perms);
 	if ((perms->allow & request) != request)
 		return -EACCES;
@@ -1341,7 +1316,6 @@ fail:
 /**
  * label_components_match - find perms for all subcomponents of a label
  * @profile: profile to find perms for
- * @rules: ruleset to search
  * @label: label to check access permissions for
  * @start: state to start match in
  * @subns: whether to do permission checks on components in a subns
@@ -1355,21 +1329,20 @@ fail:
  *        check to be stacked.
  */
 static int label_components_match(struct aa_profile *profile,
-				  struct aa_ruleset *rules,
-				  struct aa_label *label, aa_state_t start,
+				  struct aa_label *label, unsigned int start,
 				  bool subns, u32 request,
 				  struct aa_perms *perms)
 {
 	struct aa_profile *tp;
 	struct label_it i;
 	struct aa_perms tmp;
-	aa_state_t state = 0;
+	unsigned int state = 0;
 
 	/* find first subcomponent to test */
 	label_for_each(i, label, tp) {
 		if (!aa_ns_visible(profile->ns, tp->ns, subns))
 			continue;
-		state = match_component(profile, rules, tp, start);
+		state = match_component(profile, tp, start);
 		if (!state)
 			goto fail;
 		goto next;
@@ -1379,16 +1352,16 @@ static int label_components_match(struct aa_profile *profile,
 	return 0;
 
 next:
-	tmp = *aa_lookup_perms(&rules->policy, state);
+	aa_compute_perms(profile->policy.dfa, state, &tmp);
 	aa_apply_modes_to_perms(profile, &tmp);
 	aa_perms_accum(perms, &tmp);
 	label_for_each_cont(i, label, tp) {
 		if (!aa_ns_visible(profile->ns, tp->ns, subns))
 			continue;
-		state = match_component(profile, rules, tp, start);
+		state = match_component(profile, tp, start);
 		if (!state)
 			goto fail;
-		tmp = *aa_lookup_perms(&rules->policy, state);
+		aa_compute_perms(profile->policy.dfa, state, &tmp);
 		aa_apply_modes_to_perms(profile, &tmp);
 		aa_perms_accum(perms, &tmp);
 	}
@@ -1406,7 +1379,6 @@ fail:
 /**
  * aa_label_match - do a multi-component label match
  * @profile: profile to match against (NOT NULL)
- * @rules: ruleset to search
  * @label: label to match (NOT NULL)
  * @state: state to start in
  * @subns: whether to match subns components
@@ -1415,18 +1387,18 @@ fail:
  *
  * Returns: the state the match finished in, may be the none matching state
  */
-int aa_label_match(struct aa_profile *profile, struct aa_ruleset *rules,
-		   struct aa_label *label, aa_state_t state, bool subns,
-		   u32 request, struct aa_perms *perms)
+int aa_label_match(struct aa_profile *profile, struct aa_label *label,
+		   unsigned int state, bool subns, u32 request,
+		   struct aa_perms *perms)
 {
-	int error = label_compound_match(profile, rules, label, state, subns,
-					 request, perms);
+	int error = label_compound_match(profile, label, state, subns, request,
+					 perms);
 	if (!error)
 		return error;
 
 	*perms = allperms;
-	return label_components_match(profile, rules, label, state, subns,
-				      request, perms);
+	return label_components_match(profile, label, state, subns, request,
+				      perms);
 }
 
 
@@ -1454,7 +1426,7 @@ bool aa_update_label_name(struct aa_ns *ns, struct aa_label *label, gfp_t gfp)
 	if (label->hname || labels_ns(label) != ns)
 		return res;
 
-	if (aa_label_acntsxprint(&name, ns, label, FLAGS_NONE, gfp) < 0)
+	if (aa_label_acntsxprint(&name, ns, label, FLAGS_NONE, gfp) == -1)
 		return res;
 
 	ls = labels_set(label);
@@ -1559,13 +1531,13 @@ static const char *label_modename(struct aa_ns *ns, struct aa_label *label,
 
 	label_for_each(i, label, profile) {
 		if (aa_ns_visible(ns, profile->ns, flags & FLAG_VIEW_SUBNS)) {
-			count++;
-			if (profile == profile->ns->unconfined)
+			if (profile->mode == APPARMOR_UNCONFINED)
 				/* special case unconfined so stacks with
 				 * unconfined don't report as mixed. ie.
 				 * profile_foo//&:ns1:unconfined (mixed)
 				 */
 				continue;
+			count++;
 			if (mode == -1)
 				mode = profile->mode;
 			else if (mode != profile->mode)
@@ -1632,9 +1604,9 @@ int aa_label_snxprint(char *str, size_t size, struct aa_ns *ns,
 	AA_BUG(!str && size != 0);
 	AA_BUG(!label);
 
-	if (AA_DEBUG_LABEL && (flags & FLAG_ABS_ROOT)) {
+	if (flags & FLAG_ABS_ROOT) {
 		ns = root_ns;
-		len = snprintf(str, size, "_");
+		len = snprintf(str, size, "=");
 		update_for_len(total, len, size, str);
 	} else if (!ns) {
 		ns = labels_ns(label);
@@ -1704,7 +1676,7 @@ int aa_label_asxprint(char **strp, struct aa_ns *ns, struct aa_label *label,
 
 /**
  * aa_label_acntsxprint - allocate a __counted string buffer and print label
- * @strp: buffer to write to.
+ * @strp: buffer to write to. (MAY BE NULL if @size == 0)
  * @ns: namespace profile is being viewed from
  * @label: label to view (NOT NULL)
  * @flags: flags controlling what label info is printed
@@ -1745,7 +1717,7 @@ void aa_label_xaudit(struct audit_buffer *ab, struct aa_ns *ns,
 	if (!use_label_hname(ns, label, flags) ||
 	    display_mode(ns, label, flags)) {
 		len  = aa_label_asxprint(&name, ns, label, flags, gfp);
-		if (len < 0) {
+		if (len == -1) {
 			AA_DEBUG("label print error");
 			return;
 		}
@@ -1773,17 +1745,17 @@ void aa_label_seq_xprint(struct seq_file *f, struct aa_ns *ns,
 		int len;
 
 		len = aa_label_asxprint(&str, ns, label, flags, gfp);
-		if (len < 0) {
+		if (len == -1) {
 			AA_DEBUG("label print error");
 			return;
 		}
-		seq_puts(f, str);
+		seq_printf(f, "%s", str);
 		kfree(str);
 	} else if (display_mode(ns, label, flags))
 		seq_printf(f, "%s (%s)", label->hname,
 			   label_modename(ns, label, flags));
 	else
-		seq_puts(f, label->hname);
+		seq_printf(f, "%s", label->hname);
 }
 
 void aa_label_xprintk(struct aa_ns *ns, struct aa_label *label, int flags,
@@ -1796,7 +1768,7 @@ void aa_label_xprintk(struct aa_ns *ns, struct aa_label *label, int flags,
 		int len;
 
 		len = aa_label_asxprint(&str, ns, label, flags, gfp);
-		if (len < 0) {
+		if (len == -1) {
 			AA_DEBUG("label print error");
 			return;
 		}
@@ -1896,8 +1868,7 @@ struct aa_label *aa_label_strn_parse(struct aa_label *base, const char *str,
 	AA_BUG(!str);
 
 	str = skipn_spaces(str, n);
-	if (str == NULL || (AA_DEBUG_LABEL && *str == '_' &&
-			    base != &root_ns->unconfined->label))
+	if (str == NULL || (*str == '=' && base != &root_ns->unconfined->label))
 		return ERR_PTR(-EINVAL);
 
 	len = label_count_strn_entries(str, end - str);
@@ -2138,7 +2109,7 @@ static void __labelset_update(struct aa_ns *ns)
 }
 
 /**
- * __aa_labelset_update_subtree - update all labels with a stale component
+ * __aa_labelset_udate_subtree - update all labels with a stale component
  * @ns: ns to start update at (NOT NULL)
  *
  * Requires: @ns lock be held

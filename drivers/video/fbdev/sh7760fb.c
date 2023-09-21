@@ -341,7 +341,7 @@ static int sh7760fb_set_par(struct fb_info *info)
 	return 0;
 }
 
-static const struct fb_ops sh7760fb_ops = {
+static struct fb_ops sh7760fb_ops = {
 	.owner = THIS_MODULE,
 	.fb_blank = sh7760fb_blank,
 	.fb_check_var = sh7760fb_check_var,
@@ -463,7 +463,7 @@ static int sh7760fb_probe(struct platform_device *pdev)
 		goto out_fb;
 	}
 
-	par->base = ioremap(res->start, resource_size(res));
+	par->base = ioremap_nocache(res->start, resource_size(res));
 	if (!par->base) {
 		dev_err(&pdev->dev, "cannot remap\n");
 		ret = -ENODEV;
@@ -554,7 +554,7 @@ out_fb:
 	return ret;
 }
 
-static void sh7760fb_remove(struct platform_device *dev)
+static int sh7760fb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
 	struct sh7760fb_par *par = info->par;
@@ -568,6 +568,8 @@ static void sh7760fb_remove(struct platform_device *dev)
 	iounmap(par->base);
 	release_mem_region(par->ioarea->start, resource_size(par->ioarea));
 	framebuffer_release(info);
+
+	return 0;
 }
 
 static struct platform_driver sh7760_lcdc_driver = {
@@ -575,7 +577,7 @@ static struct platform_driver sh7760_lcdc_driver = {
 		   .name = "sh7760-lcdc",
 		   },
 	.probe = sh7760fb_probe,
-	.remove_new = sh7760fb_remove,
+	.remove = sh7760fb_remove,
 };
 
 module_platform_driver(sh7760_lcdc_driver);

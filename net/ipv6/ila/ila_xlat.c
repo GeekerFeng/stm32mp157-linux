@@ -477,7 +477,6 @@ int ila_xlat_nl_cmd_get_mapping(struct sk_buff *skb, struct genl_info *info)
 
 	rcu_read_lock();
 
-	ret = -ESRCH;
 	ila = ila_lookup_by_params(&xp, ilan);
 	if (ila) {
 		ret = ila_dump_info(ila,
@@ -602,6 +601,8 @@ out_ret:
 	return ret;
 }
 
+#define ILA_HASH_TABLE_SIZE 1024
+
 int ila_xlat_init_net(struct net *net)
 {
 	struct ila_net *ilan = net_generic(net, ila_net_id);
@@ -611,11 +612,7 @@ int ila_xlat_init_net(struct net *net)
 	if (err)
 		return err;
 
-	err = rhashtable_init(&ilan->xlat.rhash_table, &rht_params);
-	if (err) {
-		free_bucket_spinlocks(ilan->xlat.locks);
-		return err;
-	}
+	rhashtable_init(&ilan->xlat.rhash_table, &rht_params);
 
 	return 0;
 }

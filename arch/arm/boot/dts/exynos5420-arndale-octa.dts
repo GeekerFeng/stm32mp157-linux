@@ -15,17 +15,12 @@
 #include <dt-bindings/clock/samsung,s2mps11.h>
 
 / {
-	model = "Insignal Arndale Octa evaluation board based on Exynos5420";
+	model = "Insignal Arndale Octa evaluation board based on EXYNOS5420";
 	compatible = "insignal,arndale-octa", "samsung,exynos5420", "samsung,exynos5";
 
 	memory@20000000 {
 		device_type = "memory";
 		reg = <0x20000000 0x80000000>;
-	};
-
-	aliases {
-		mmc0 = &mmc_0;
-		mmc1 = &mmc_2;
 	};
 
 	chosen {
@@ -44,10 +39,10 @@
 		};
 	};
 
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
 
-		key-wakeup {
+		wakeup {
 			label = "SW-TACT1";
 			gpios = <&gpx2 7 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_WAKEUP>;
@@ -349,15 +344,14 @@
 &hsi2c_4 {
 	status = "okay";
 
-	pmic@66 {
+	s2mps11_pmic@66 {
 		compatible = "samsung,s2mps11-pmic";
 		reg = <0x66>;
 
 		interrupt-parent = <&gpx3>;
-		interrupts = <2 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <2 IRQ_TYPE_EDGE_FALLING>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&s2mps11_irq>;
-		wakeup-source;
 
 		s2mps11_osc: clocks {
 			compatible = "samsung,s2mps11-clk";
@@ -590,7 +584,6 @@
 				regulator-name = "PVDD_G3DS_1V0";
 				regulator-min-microvolt = <800000>;
 				regulator-max-microvolt = <1100000>;
-				regulator-always-on;
 
 				regulator-state-mem {
 					regulator-on-in-suspend;
@@ -679,7 +672,7 @@
 			};
 
 			buck2_reg: BUCK2 {
-				regulator-name = "PVDD_ARM_1V0";
+				regulator-name = "vdd_arm";
 				regulator-min-microvolt = <800000>;
 				regulator-max-microvolt = <1500000>;
 				regulator-always-on;
@@ -704,7 +697,6 @@
 				regulator-name = "PVDD_G3D_1V0";
 				regulator-min-microvolt = <800000>;
 				regulator-max-microvolt = <1400000>;
-				regulator-always-on;
 
 				regulator-state-mem {
 					regulator-off-in-suspend;
@@ -783,7 +775,6 @@
 	status = "okay";
 	non-removable;
 	card-detect-delay = <200>;
-	mmc-ddr-1_8v;
 	samsung,dw-mshc-ciu-div = <3>;
 	samsung,dw-mshc-sdr-timing = <0 4>;
 	samsung,dw-mshc-ddr-timing = <0 2>;
@@ -814,7 +805,7 @@
 };
 
 &pinctrl_0 {
-	s2mps11_irq: s2mps11-irq-pins {
+	s2mps11_irq: s2mps11-irq {
 		samsung,pins = "gpx3-2";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_F>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
@@ -830,14 +821,4 @@
 
 &usbdrd_dwc3_1 {
 	dr_mode = "host";
-};
-
-&usbdrd3_0 {
-	vdd10-supply = <&ldo11_reg>;
-	vdd33-supply = <&ldo9_reg>;
-};
-
-&usbdrd3_1 {
-	vdd10-supply = <&ldo11_reg>;
-	vdd33-supply = <&ldo9_reg>;
 };

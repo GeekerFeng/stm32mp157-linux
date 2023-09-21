@@ -17,8 +17,6 @@
 #include <linux/input.h>
 #include <linux/interrupt.h>
 #include <linux/leds.h>
-#include <linux/mtd/nand-gpio.h>
-#include <linux/mtd/partitions.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/regulator/fixed.h>
@@ -28,7 +26,8 @@
 #include <linux/omapfb.h>
 #include <linux/io.h>
 #include <linux/platform_data/gpio-omap.h>
-#include <linux/soc/ti/omap1-mux.h>
+
+#include <media/soc_camera.h>
 
 #include <asm/serial.h>
 #include <asm/mach-types.h>
@@ -36,9 +35,12 @@
 #include <asm/mach/map.h>
 
 #include <linux/platform_data/keypad-omap.h>
+#include <mach/mux.h>
 
-#include "hardware.h"
-#include "usb.h"
+#include <mach/hardware.h>
+#include "camera.h"
+#include <mach/usb.h>
+
 #include "ams-delta-fiq.h"
 #include "board-ams-delta.h"
 #include "iomap.h"
@@ -292,42 +294,9 @@ struct modem_private_data {
 
 static struct modem_private_data modem_priv;
 
-/*
- * Define partitions for flash device
- */
-
-static struct mtd_partition partition_info[] = {
-	{ .name		= "Kernel",
-	  .offset	= 0,
-	  .size		= 3 * SZ_1M + SZ_512K },
-	{ .name		= "u-boot",
-	  .offset	= 3 * SZ_1M + SZ_512K,
-	  .size		= SZ_256K },
-	{ .name		= "u-boot params",
-	  .offset	= 3 * SZ_1M + SZ_512K + SZ_256K,
-	  .size		= SZ_256K },
-	{ .name		= "Amstrad LDR",
-	  .offset	= 4 * SZ_1M,
-	  .size		= SZ_256K },
-	{ .name		= "File system",
-	  .offset	= 4 * SZ_1M + 1 * SZ_256K,
-	  .size		= 27 * SZ_1M },
-	{ .name		= "PBL reserved",
-	  .offset	= 32 * SZ_1M - 3 * SZ_256K,
-	  .size		=  3 * SZ_256K },
-};
-
-static struct gpio_nand_platdata nand_platdata = {
-	.parts		= partition_info,
-	.num_parts	= ARRAY_SIZE(partition_info),
-};
-
 static struct platform_device ams_delta_nand_device = {
 	.name	= "ams-delta-nand",
 	.id	= -1,
-	.dev	= {
-		.platform_data = &nand_platdata,
-	},
 };
 
 #define OMAP_GPIO_LABEL		"gpio-0-15"
@@ -337,14 +306,10 @@ static struct gpiod_lookup_table ams_delta_nand_gpio_table = {
 	.table = {
 		GPIO_LOOKUP(OMAP_GPIO_LABEL, AMS_DELTA_GPIO_PIN_NAND_RB, "rdy",
 			    0),
-		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NCE, "nce",
-			    GPIO_ACTIVE_LOW),
-		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NRE, "nre",
-			    GPIO_ACTIVE_LOW),
-		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NWP, "nwp",
-			    GPIO_ACTIVE_LOW),
-		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NWE, "nwe",
-			    GPIO_ACTIVE_LOW),
+		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NCE, "nce", 0),
+		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NRE, "nre", 0),
+		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NWP, "nwp", 0),
+		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_NWE, "nwe", 0),
 		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_ALE, "ale", 0),
 		GPIO_LOOKUP(LATCH2_LABEL, LATCH2_PIN_NAND_CLE, "cle", 0),
 		GPIO_LOOKUP_IDX(OMAP_MPUIO_LABEL, 0, "data", 0, 0),
@@ -406,6 +371,9 @@ static struct gpio_led gpio_leds[] __initdata = {
 	[LATCH1_PIN_LED_CAMERA] = {
 		.name		 = "camera",
 		.default_state	 = LEDS_GPIO_DEFSTATE_OFF,
+#ifdef CONFIG_LEDS_TRIGGERS
+		.default_trigger = "ams_delta_camera",
+#endif
 	},
 	[LATCH1_PIN_LED_ADVERT] = {
 		.name		 = "advert",
@@ -450,6 +418,51 @@ static struct gpiod_lookup_table leds_gpio_table = {
 				LATCH1_PIN_LED_VOICE, 0),
 		{ },
 	},
+};
+
+static struct i2c_board_info ams_delta_camera_board_info[] = {
+	{
+		I2C_BOARD_INFO("ov6650", 0x60),
+	},
+};
+
+#ifdef CONFIG_LEDS_TRIGGERS
+DEFINE_LED_TRIGGER(ams_delta_camera_led_trigger);
+
+static int ams_delta_camera_power(struct device *dev, int power)
+{
+	/*
+	 * turn on camera LED
+	 */
+	if (power)
+		led_trigger_event(ams_delta_camera_led_trigger, LED_FULL);
+	else
+		led_trigger_event(ams_delta_camera_led_trigger, LED_OFF);
+	return 0;
+}
+#else
+#define ams_delta_camera_power	NULL
+#endif
+
+static struct soc_camera_link ams_delta_iclink = {
+	.bus_id         = 0,	/* OMAP1 SoC camera bus */
+	.i2c_adapter_id = 1,
+	.board_info     = &ams_delta_camera_board_info[0],
+	.module_name    = "ov6650",
+	.power		= ams_delta_camera_power,
+};
+
+static struct platform_device ams_delta_camera_device = {
+	.name   = "soc-camera-pdrv",
+	.id     = 0,
+	.dev    = {
+		.platform_data = &ams_delta_iclink,
+	},
+};
+
+static struct omap1_cam_platform_data ams_delta_camera_platform_data = {
+	.camexclk_khz	= 12000,	/* default 12MHz clock, no extra DPLL */
+	.lclk_khz_max	= 1334,		/* results in 5fps CIF, 10fps QCIF */
 };
 
 static struct platform_device ams_delta_audio_device = {
@@ -546,6 +559,7 @@ static struct platform_device *ams_delta_devices[] __initdata = {
 	&latch1_gpio_device,
 	&latch2_gpio_device,
 	&ams_delta_kp_device,
+	&ams_delta_camera_device,
 	&ams_delta_audio_device,
 	&ams_delta_serio_device,
 	&ams_delta_nand_device,
@@ -664,7 +678,7 @@ static void __init ams_delta_latch2_init(void)
 {
 	u16 latch2 = 1 << LATCH2_PIN_MODEM_NRESET | 1 << LATCH2_PIN_MODEM_CODEC;
 
-	__raw_writew(latch2, IOMEM(LATCH2_VIRT));
+	__raw_writew(latch2, LATCH2_VIRT);
 }
 
 static void __init ams_delta_init(void)
@@ -697,6 +711,11 @@ static void __init ams_delta_init(void)
 	omap_register_i2c_bus(1, 100, NULL, 0);
 
 	omap1_usb_init(&ams_delta_usb_config);
+	omap1_set_camera_info(&ams_delta_camera_platform_data);
+#ifdef CONFIG_LEDS_TRIGGERS
+	led_trigger_register_simple("ams_delta_camera",
+			&ams_delta_camera_led_trigger);
+#endif
 	platform_add_devices(ams_delta_devices, ARRAY_SIZE(ams_delta_devices));
 
 	/*
@@ -822,6 +841,8 @@ static int __init modem_nreset_init(void)
  */
 static int __init ams_delta_modem_init(void)
 {
+	int err;
+
 	if (!machine_is_ams_delta())
 		return -ENODEV;
 
@@ -830,7 +851,9 @@ static int __init ams_delta_modem_init(void)
 	/* Initialize the modem_nreset regulator consumer before use */
 	modem_priv.regulator = ERR_PTR(-ENODEV);
 
-	return platform_device_register(&ams_delta_modem_device);
+	err = platform_device_register(&ams_delta_modem_device);
+
+	return err;
 }
 arch_initcall_sync(ams_delta_modem_init);
 
@@ -867,7 +890,7 @@ static void __init ams_delta_init_late(void)
 
 static void __init ams_delta_map_io(void)
 {
-	omap1_map_io();
+	omap15xx_map_io();
 	iotable_init(ams_delta_io_desc, ARRAY_SIZE(ams_delta_io_desc));
 }
 

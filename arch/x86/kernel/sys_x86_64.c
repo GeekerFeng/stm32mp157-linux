@@ -21,6 +21,8 @@
 
 #include <asm/elf.h>
 #include <asm/ia32.h>
+#include <asm/syscalls.h>
+#include <asm/mpx.h>
 
 /*
  * Align a virtual address to avoid aliasing in the I$ on AMD F15h.
@@ -68,6 +70,9 @@ static int __init control_va_addr_alignment(char *str)
 	if (*str == 0)
 		return 1;
 
+	if (*str == '=')
+		str++;
+
 	if (!strcmp(str, "32"))
 		va_align.flags = ALIGN_VA_32;
 	else if (!strcmp(str, "64"))
@@ -77,20 +82,24 @@ static int __init control_va_addr_alignment(char *str)
 	else if (!strcmp(str, "on"))
 		va_align.flags = ALIGN_VA_32 | ALIGN_VA_64;
 	else
-		pr_warn("invalid option value: 'align_va_addr=%s'\n", str);
+		return 0;
 
 	return 1;
 }
-__setup("align_va_addr=", control_va_addr_alignment);
+__setup("align_va_addr", control_va_addr_alignment);
 
 SYSCALL_DEFINE6(mmap, unsigned long, addr, unsigned long, len,
 		unsigned long, prot, unsigned long, flags,
 		unsigned long, fd, unsigned long, off)
 {
+	long error;
+	error = -EINVAL;
 	if (off & ~PAGE_MASK)
-		return -EINVAL;
+		goto out;
 
-	return ksys_mmap_pgoff(addr, len, prot, flags, fd, off >> PAGE_SHIFT);
+	error = ksys_mmap_pgoff(addr, len, prot, flags, fd, off >> PAGE_SHIFT);
+out:
+	return error;
 }
 
 static void find_start_end(unsigned long addr, unsigned long flags,
@@ -127,6 +136,10 @@ arch_get_unmapped_area(struct file *filp, unsigned long addr,
 	struct vm_area_struct *vma;
 	struct vm_unmapped_area_info info;
 	unsigned long begin, end;
+
+	addr = mpx_unmapped_area_check(addr, len, flags);
+	if (IS_ERR_VALUE(addr))
+		return addr;
 
 	if (flags & MAP_FIXED)
 		return addr;
@@ -166,6 +179,10 @@ arch_get_unmapped_area_topdown(struct file *filp, const unsigned long addr0,
 	struct mm_struct *mm = current->mm;
 	unsigned long addr = addr0;
 	struct vm_unmapped_area_info info;
+
+	addr = mpx_unmapped_area_check(addr, len, flags);
+	if (IS_ERR_VALUE(addr))
+		return addr;
 
 	/* requested length too big for entire address space */
 	if (len > TASK_SIZE)

@@ -33,7 +33,6 @@
  * (which, incidentally, is about the same saving as a 2.5in hard disk
  * entering standby mode.)
  */
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -47,6 +46,8 @@
 #include <linux/io.h>
 #include <linux/i2c.h>
 #include <linux/i2c-algo-bit.h>
+
+#include <asm/pgtable.h>
 
 #ifdef __arm__
 #include <asm/mach-types.h>
@@ -1059,7 +1060,7 @@ static int cyber2000fb_blank(int blank, struct fb_info *info)
 	return 0;
 }
 
-static const struct fb_ops cyber2000fb_ops = {
+static struct fb_ops cyber2000fb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= cyber2000fb_check_var,
 	.fb_set_par	= cyber2000fb_set_par,
@@ -1134,7 +1135,7 @@ int cyber2000fb_attach(struct cyberpro_info *info, int idx)
 		info->fb_size	      = int_cfb_info->fb.fix.smem_len;
 		info->info	      = int_cfb_info;
 
-		strscpy(info->dev_name, int_cfb_info->fb.fix.id,
+		strlcpy(info->dev_name, int_cfb_info->fb.fix.id,
 			sizeof(info->dev_name));
 	}
 
@@ -1159,14 +1160,12 @@ EXPORT_SYMBOL(cyber2000fb_detach);
 #define DDC_SDA_IN	(1 << 6)
 
 static void cyber2000fb_enable_ddc(struct cfb_info *cfb)
-	__acquires(&cfb->reg_b0_lock)
 {
 	spin_lock(&cfb->reg_b0_lock);
 	cyber2000fb_writew(0x1bf, 0x3ce, cfb);
 }
 
 static void cyber2000fb_disable_ddc(struct cfb_info *cfb)
-	__releases(&cfb->reg_b0_lock)
 {
 	cyber2000fb_writew(0x0bf, 0x3ce, cfb);
 	spin_unlock(&cfb->reg_b0_lock);
@@ -1229,7 +1228,7 @@ static int cyber2000fb_ddc_getsda(void *data)
 
 static int cyber2000fb_setup_ddc_bus(struct cfb_info *cfb)
 {
-	strscpy(cfb->ddc_adapter.name, cfb->fb.fix.id,
+	strlcpy(cfb->ddc_adapter.name, cfb->fb.fix.id,
 		sizeof(cfb->ddc_adapter.name));
 	cfb->ddc_adapter.owner		= THIS_MODULE;
 	cfb->ddc_adapter.class		= I2C_CLASS_DDC;
@@ -1304,7 +1303,7 @@ static int cyber2000fb_i2c_getscl(void *data)
 
 static int cyber2000fb_i2c_register(struct cfb_info *cfb)
 {
-	strscpy(cfb->i2c_adapter.name, cfb->fb.fix.id,
+	strlcpy(cfb->i2c_adapter.name, cfb->fb.fix.id,
 		sizeof(cfb->i2c_adapter.name));
 	cfb->i2c_adapter.owner = THIS_MODULE;
 	cfb->i2c_adapter.algo_data = &cfb->i2c_algo;
@@ -1500,7 +1499,7 @@ static int cyber2000fb_setup(char *options)
 		if (strncmp(opt, "font:", 5) == 0) {
 			static char default_font_storage[40];
 
-			strscpy(default_font_storage, opt + 5,
+			strlcpy(default_font_storage, opt + 5,
 				sizeof(default_font_storage));
 			default_font = default_font_storage;
 			continue;
@@ -1720,10 +1719,6 @@ static int cyberpro_pci_probe(struct pci_dev *dev,
 
 	sprintf(name, "CyberPro%4X", id->device);
 
-	err = aperture_remove_conflicting_pci_devices(dev, name);
-	if (err)
-		return err;
-
 	err = pci_enable_device(dev);
 	if (err)
 		return err;
@@ -1795,7 +1790,6 @@ failed_ioremap:
 failed_regions:
 	cyberpro_free_fb_info(cfb);
 failed_release:
-	pci_disable_device(dev);
 	return err;
 }
 
@@ -1812,11 +1806,10 @@ static void cyberpro_pci_remove(struct pci_dev *dev)
 			int_cfb_info = NULL;
 
 		pci_release_regions(dev);
-		pci_disable_device(dev);
 	}
 }
 
-static int __maybe_unused cyberpro_pci_suspend(struct device *dev)
+static int cyberpro_pci_suspend(struct pci_dev *dev, pm_message_t state)
 {
 	return 0;
 }
@@ -1824,9 +1817,9 @@ static int __maybe_unused cyberpro_pci_suspend(struct device *dev)
 /*
  * Re-initialise the CyberPro hardware
  */
-static int __maybe_unused cyberpro_pci_resume(struct device *dev)
+static int cyberpro_pci_resume(struct pci_dev *dev)
 {
-	struct cfb_info *cfb = dev_get_drvdata(dev);
+	struct cfb_info *cfb = pci_get_drvdata(dev);
 
 	if (cfb) {
 		cyberpro_pci_enable_mmio(cfb);
@@ -1852,15 +1845,12 @@ static struct pci_device_id cyberpro_pci_table[] = {
 
 MODULE_DEVICE_TABLE(pci, cyberpro_pci_table);
 
-static SIMPLE_DEV_PM_OPS(cyberpro_pci_pm_ops,
-			 cyberpro_pci_suspend,
-			 cyberpro_pci_resume);
-
 static struct pci_driver cyberpro_driver = {
 	.name		= "CyberPro",
 	.probe		= cyberpro_pci_probe,
 	.remove		= cyberpro_pci_remove,
-	.driver.pm	= &cyberpro_pci_pm_ops,
+	.suspend	= cyberpro_pci_suspend,
+	.resume		= cyberpro_pci_resume,
 	.id_table	= cyberpro_pci_table
 };
 
@@ -1877,12 +1867,7 @@ static int __init cyber2000fb_init(void)
 
 #ifndef MODULE
 	char *option = NULL;
-#endif
 
-	if (fb_modesetting_disabled("CyberPro"))
-		return -ENODEV;
-
-#ifndef MODULE
 	if (fb_get_options("cyber2000fb", &option))
 		return -ENODEV;
 	cyber2000fb_setup(option);

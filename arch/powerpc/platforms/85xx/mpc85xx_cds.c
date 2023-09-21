@@ -21,11 +21,9 @@
 #include <linux/initrd.h>
 #include <linux/interrupt.h>
 #include <linux/fsl_devices.h>
-#include <linux/of_address.h>
-#include <linux/of_irq.h>
 #include <linux/of_platform.h>
-#include <linux/pgtable.h>
 
+#include <asm/pgtable.h>
 #include <asm/page.h>
 #include <linux/atomic.h>
 #include <asm/time.h>
@@ -35,6 +33,7 @@
 #include <asm/pci-bridge.h>
 #include <asm/irq.h>
 #include <mm/mmu_decl.h>
+#include <asm/prom.h>
 #include <asm/udbg.h>
 #include <asm/mpic.h>
 #include <asm/i8259.h>
@@ -152,14 +151,13 @@ static void __init mpc85xx_cds_pci_irq_fixup(struct pci_dev *dev)
 		 */
 		case PCI_DEVICE_ID_VIA_82C586_2:
 		/* There are two USB controllers.
-		 * Identify them by function number
+		 * Identify them by functon number
 		 */
 			if (PCI_FUNC(dev->devfn) == 3)
 				dev->irq = 11;
 			else
 				dev->irq = 10;
 			pci_write_config_byte(dev, PCI_INTERRUPT_LINE, dev->irq);
-			break;
 		default:
 			break;
 		}
@@ -220,6 +218,12 @@ static irqreturn_t mpc85xx_8259_cascade_action(int irq, void *dev_id)
 {
 	return IRQ_HANDLED;
 }
+
+static struct irqaction mpc85xxcds_8259_irqaction = {
+	.handler = mpc85xx_8259_cascade_action,
+	.flags = IRQF_SHARED | IRQF_NO_THREAD,
+	.name = "8259 cascade",
+};
 #endif /* PPC_I8259 */
 #endif /* CONFIG_PCI */
 
@@ -267,10 +271,7 @@ static int mpc85xx_cds_8259_attach(void)
 	 *  disabled when the last user of the shared IRQ line frees their
 	 *  interrupt.
 	 */
-	ret = request_irq(cascade_irq, mpc85xx_8259_cascade_action,
-			  IRQF_SHARED | IRQF_NO_THREAD, "8259 cascade",
-			  cascade_node);
-	if (ret) {
+	if ((ret = setup_irq(cascade_irq, &mpc85xxcds_8259_irqaction))) {
 		printk(KERN_ERR "Failed to setup cascade interrupt\n");
 		return ret;
 	}
@@ -284,7 +285,7 @@ machine_device_initcall(mpc85xx_cds, mpc85xx_cds_8259_attach);
 
 #endif /* CONFIG_PPC_I8259 */
 
-static void __init mpc85xx_cds_pci_assign_primary(void)
+static void mpc85xx_cds_pci_assign_primary(void)
 {
 #ifdef CONFIG_PCI
 	struct device_node *np;
@@ -370,11 +371,20 @@ static void mpc85xx_cds_show_cpuinfo(struct seq_file *m)
 	seq_printf(m, "PLL setting\t: 0x%x\n", ((phid1 >> 24) & 0x3f));
 }
 
+
+/*
+ * Called very early, device-tree isn't unflattened
+ */
+static int __init mpc85xx_cds_probe(void)
+{
+	return of_machine_is_compatible("MPC85xxCDS");
+}
+
 machine_arch_initcall(mpc85xx_cds, mpc85xx_common_publish_devices);
 
 define_machine(mpc85xx_cds) {
 	.name		= "MPC85xx CDS",
-	.compatible	= "MPC85xxCDS",
+	.probe		= mpc85xx_cds_probe,
 	.setup_arch	= mpc85xx_cds_setup_arch,
 	.init_IRQ	= mpc85xx_cds_pic_init,
 	.show_cpuinfo	= mpc85xx_cds_show_cpuinfo,
@@ -383,5 +393,6 @@ define_machine(mpc85xx_cds) {
 	.pcibios_fixup_bus	= mpc85xx_cds_fixup_bus,
 	.pcibios_fixup_phb      = fsl_pcibios_fixup_phb,
 #endif
+	.calibrate_decr = generic_calibrate_decr,
 	.progress	= udbg_progress,
 };

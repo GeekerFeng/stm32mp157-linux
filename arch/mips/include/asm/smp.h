@@ -66,7 +66,7 @@ extern void calculate_cpu_foreign_map(void);
  * it goes straight through and wastes no time serializing
  * anything. Worst case is that we lose a reschedule ...
  */
-static inline void arch_smp_send_reschedule(int cpu)
+static inline void smp_send_reschedule(int cpu)
 {
 	extern const struct plat_smp_ops *mp_ops;	/* private */
 
@@ -88,7 +88,7 @@ static inline void __cpu_die(unsigned int cpu)
 	mp_ops->cpu_die(cpu);
 }
 
-extern void __noreturn play_dead(void);
+extern void play_dead(void);
 #endif
 
 #ifdef CONFIG_KEXEC
@@ -125,7 +125,7 @@ static inline void arch_send_call_function_single_ipi(int cpu)
 {
 	extern const struct plat_smp_ops *mp_ops;	/* private */
 
-	mp_ops->send_ipi_single(cpu, SMP_CALL_FUNCTION);
+	mp_ops->send_ipi_mask(cpumask_of(cpu), SMP_CALL_FUNCTION);
 }
 
 static inline void arch_send_call_function_ipi_mask(const struct cpumask *mask)

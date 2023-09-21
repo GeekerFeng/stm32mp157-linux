@@ -44,7 +44,7 @@ void *thr(void *arg)
 	struct kvm_run *run = tc->run;
 
 	res = ioctl(kvmcpu, KVM_RUN, 0);
-	pr_info("ret1=%d exit_reason=%d suberror=%d\n",
+	printf("ret1=%d exit_reason=%d suberror=%d\n",
 		res, run->exit_reason, run->internal.suberror);
 
 	return 0;
@@ -59,10 +59,10 @@ void test(void)
 
 	kvm = open("/dev/kvm", O_RDWR);
 	TEST_ASSERT(kvm != -1, "failed to open /dev/kvm");
-	kvmvm = __kvm_ioctl(kvm, KVM_CREATE_VM, NULL);
-	TEST_ASSERT(kvmvm > 0, KVM_IOCTL_ERROR(KVM_CREATE_VM, kvmvm));
+	kvmvm = ioctl(kvm, KVM_CREATE_VM, 0);
+	TEST_ASSERT(kvmvm != -1, "KVM_CREATE_VM failed");
 	kvmcpu = ioctl(kvmvm, KVM_CREATE_VCPU, 0);
-	TEST_ASSERT(kvmcpu != -1, KVM_IOCTL_ERROR(KVM_CREATE_VCPU, kvmcpu));
+	TEST_ASSERT(kvmcpu != -1, "KVM_CREATE_VCPU failed");
 	run = (struct kvm_run *)mmap(0, 4096, PROT_READ|PROT_WRITE, MAP_SHARED,
 				    kvmcpu, 0);
 	tc.kvmcpu = kvmcpu;
@@ -82,9 +82,8 @@ int get_warnings_count(void)
 	FILE *f;
 
 	f = popen("dmesg | grep \"WARNING:\" | wc -l", "r");
-	if (fscanf(f, "%d", &warnings) < 1)
-		warnings = 0;
-	pclose(f);
+	fscanf(f, "%d", &warnings);
+	fclose(f);
 
 	return warnings;
 }
@@ -93,9 +92,15 @@ int main(void)
 {
 	int warnings_before, warnings_after;
 
-	TEST_REQUIRE(host_cpu_is_intel);
+	if (!is_intel_cpu()) {
+		printf("Must be run on an Intel CPU, skipping test\n");
+		exit(KSFT_SKIP);
+	}
 
-	TEST_REQUIRE(!vm_is_unrestricted_guest(NULL));
+	if (vm_is_unrestricted_guest(NULL)) {
+		printf("Unrestricted guest must be disabled, skipping test\n");
+		exit(KSFT_SKIP);
+	}
 
 	warnings_before = get_warnings_count();
 

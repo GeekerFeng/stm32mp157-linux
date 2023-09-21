@@ -120,9 +120,15 @@ static inline struct meson_pwm *to_meson_pwm(struct pwm_chip *chip)
 static int meson_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 {
 	struct meson_pwm *meson = to_meson_pwm(chip);
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
+	struct meson_pwm_channel *channel;
 	struct device *dev = chip->dev;
 	int err;
+
+	channel = pwm_get_chip_data(pwm);
+	if (channel)
+		return 0;
+
+	channel = &meson->channels[pwm->hwpwm];
 
 	if (channel->clk_parent) {
 		err = clk_set_parent(channel->clk, channel->clk_parent);
@@ -130,7 +136,7 @@ static int meson_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 			dev_err(dev, "failed to set parent %s for %s: %d\n",
 				__clk_get_name(channel->clk_parent),
 				__clk_get_name(channel->clk), err);
-			return err;
+				return err;
 		}
 	}
 
@@ -141,33 +147,27 @@ static int meson_pwm_request(struct pwm_chip *chip, struct pwm_device *pwm)
 		return err;
 	}
 
-	return 0;
+	return pwm_set_chip_data(pwm, channel);
 }
 
 static void meson_pwm_free(struct pwm_chip *chip, struct pwm_device *pwm)
 {
-	struct meson_pwm *meson = to_meson_pwm(chip);
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
+	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 
-	clk_disable_unprepare(channel->clk);
+	if (channel)
+		clk_disable_unprepare(channel->clk);
 }
 
 static int meson_pwm_calc(struct meson_pwm *meson, struct pwm_device *pwm,
 			  const struct pwm_state *state)
 {
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
+	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 	unsigned int duty, period, pre_div, cnt, duty_cnt;
-	unsigned long fin_freq;
+	unsigned long fin_freq = -1;
 
 	duty = state->duty_cycle;
 	period = state->period;
 
-	/*
-	 * Note this is wrong. The result is an output wave that isn't really
-	 * inverted and so is wrongly identified by .get_state as normal.
-	 * Fixing this needs some care however as some machines might rely on
-	 * this.
-	 */
 	if (state->polarity == PWM_POLARITY_INVERSED)
 		duty = period - duty;
 
@@ -224,7 +224,7 @@ static int meson_pwm_calc(struct meson_pwm *meson, struct pwm_device *pwm,
 
 static void meson_pwm_enable(struct meson_pwm *meson, struct pwm_device *pwm)
 {
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
+	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 	struct meson_pwm_channel_data *channel_data;
 	unsigned long flags;
 	u32 value;
@@ -267,9 +267,12 @@ static void meson_pwm_disable(struct meson_pwm *meson, struct pwm_device *pwm)
 static int meson_pwm_apply(struct pwm_chip *chip, struct pwm_device *pwm,
 			   const struct pwm_state *state)
 {
+	struct meson_pwm_channel *channel = pwm_get_chip_data(pwm);
 	struct meson_pwm *meson = to_meson_pwm(chip);
-	struct meson_pwm_channel *channel = &meson->channels[pwm->hwpwm];
 	int err = 0;
+
+	if (!state)
+		return -EINVAL;
 
 	if (!state->enabled) {
 		if (state->polarity == PWM_POLARITY_INVERSED) {
@@ -324,8 +327,8 @@ static unsigned int meson_pwm_cnt_to_ns(struct pwm_chip *chip,
 	return cnt * fin_ns * (channel->pre_div + 1);
 }
 
-static int meson_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
-			       struct pwm_state *state)
+static void meson_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
+				struct pwm_state *state)
 {
 	struct meson_pwm *meson = to_meson_pwm(chip);
 	struct meson_pwm_channel_data *channel_data;
@@ -333,7 +336,7 @@ static int meson_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 	u32 value, tmp;
 
 	if (!state)
-		return 0;
+		return;
 
 	channel = &meson->channels[pwm->hwpwm];
 	channel_data = &meson_pwm_per_channel_data[pwm->hwpwm];
@@ -363,10 +366,6 @@ static int meson_pwm_get_state(struct pwm_chip *chip, struct pwm_device *pwm,
 		state->period = 0;
 		state->duty_cycle = 0;
 	}
-
-	state->polarity = PWM_POLARITY_NORMAL;
-
-	return 0;
 }
 
 static const struct pwm_ops meson_pwm_ops = {
@@ -418,7 +417,7 @@ static const struct meson_pwm_data pwm_axg_ee_data = {
 };
 
 static const char * const pwm_axg_ao_parent_names[] = {
-	"xtal", "axg_ao_clk81", "fclk_div4", "fclk_div5"
+	"aoclk81", "xtal", "fclk_div4", "fclk_div5"
 };
 
 static const struct meson_pwm_data pwm_axg_ao_data = {
@@ -427,7 +426,7 @@ static const struct meson_pwm_data pwm_axg_ao_data = {
 };
 
 static const char * const pwm_g12a_ao_ab_parent_names[] = {
-	"xtal", "g12a_ao_clk81", "fclk_div4", "fclk_div5"
+	"xtal", "aoclk81", "fclk_div4", "fclk_div5"
 };
 
 static const struct meson_pwm_data pwm_g12a_ao_ab_data = {
@@ -436,7 +435,7 @@ static const struct meson_pwm_data pwm_g12a_ao_ab_data = {
 };
 
 static const char * const pwm_g12a_ao_cd_parent_names[] = {
-	"xtal", "g12a_ao_clk81",
+	"xtal", "aoclk81",
 };
 
 static const struct meson_pwm_data pwm_g12a_ao_cd_data = {
@@ -538,20 +537,25 @@ static int meson_pwm_init_channels(struct meson_pwm *meson)
 static int meson_pwm_probe(struct platform_device *pdev)
 {
 	struct meson_pwm *meson;
+	struct resource *regs;
 	int err;
 
 	meson = devm_kzalloc(&pdev->dev, sizeof(*meson), GFP_KERNEL);
 	if (!meson)
 		return -ENOMEM;
 
-	meson->base = devm_platform_ioremap_resource(pdev, 0);
+	regs = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	meson->base = devm_ioremap_resource(&pdev->dev, regs);
 	if (IS_ERR(meson->base))
 		return PTR_ERR(meson->base);
 
 	spin_lock_init(&meson->lock);
 	meson->chip.dev = &pdev->dev;
 	meson->chip.ops = &meson_pwm_ops;
+	meson->chip.base = -1;
 	meson->chip.npwm = MESON_NUM_PWMS;
+	meson->chip.of_xlate = of_pwm_xlate_with_flags;
+	meson->chip.of_pwm_n_cells = 3;
 
 	meson->data = of_device_get_match_data(&pdev->dev);
 
@@ -559,13 +563,22 @@ static int meson_pwm_probe(struct platform_device *pdev)
 	if (err < 0)
 		return err;
 
-	err = devm_pwmchip_add(&pdev->dev, &meson->chip);
+	err = pwmchip_add(&meson->chip);
 	if (err < 0) {
 		dev_err(&pdev->dev, "failed to register PWM chip: %d\n", err);
 		return err;
 	}
 
+	platform_set_drvdata(pdev, meson);
+
 	return 0;
+}
+
+static int meson_pwm_remove(struct platform_device *pdev)
+{
+	struct meson_pwm *meson = platform_get_drvdata(pdev);
+
+	return pwmchip_remove(&meson->chip);
 }
 
 static struct platform_driver meson_pwm_driver = {
@@ -574,6 +587,7 @@ static struct platform_driver meson_pwm_driver = {
 		.of_match_table = meson_pwm_matches,
 	},
 	.probe = meson_pwm_probe,
+	.remove = meson_pwm_remove,
 };
 module_platform_driver(meson_pwm_driver);
 

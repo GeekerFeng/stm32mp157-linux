@@ -17,7 +17,7 @@ typedef struct
 
 #define LOCAL_INIT(i)	{ (i) }
 
-static __inline__ long local_read(const local_t *l)
+static __inline__ long local_read(local_t *l)
 {
 	return READ_ONCE(l->v);
 }
@@ -88,17 +88,6 @@ static __inline__ long local_cmpxchg(local_t *l, long o, long n)
 	powerpc_local_irq_pmu_restore(flags);
 
 	return t;
-}
-
-static __inline__ bool local_try_cmpxchg(local_t *l, long *po, long n)
-{
-	long o = *po, r;
-
-	r = local_cmpxchg(l, o, n);
-	if (unlikely(r != o))
-		*po = r;
-
-	return likely(r == o);
 }
 
 static __inline__ long local_xchg(local_t *l, long n)

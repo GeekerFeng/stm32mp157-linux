@@ -2,7 +2,7 @@
 /*
  * AMD Secure Processor driver
  *
- * Copyright (C) 2017-2019 Advanced Micro Devices, Inc.
+ * Copyright (C) 2017-2018 Advanced Micro Devices, Inc.
  *
  * Author: Tom Lendacky <thomas.lendacky@amd.com>
  * Author: Gary R Hook <gary.hook@amd.com>
@@ -39,33 +39,10 @@ struct ccp_vdata {
 	const unsigned int rsamax;
 };
 
-struct sev_vdata {
-	const unsigned int cmdresp_reg;
-	const unsigned int cmdbuff_addr_lo_reg;
-	const unsigned int cmdbuff_addr_hi_reg;
-};
-
-struct tee_vdata {
-	const unsigned int cmdresp_reg;
-	const unsigned int cmdbuff_addr_lo_reg;
-	const unsigned int cmdbuff_addr_hi_reg;
-	const unsigned int ring_wptr_reg;
-	const unsigned int ring_rptr_reg;
-};
-
-struct platform_access_vdata {
-	const unsigned int cmdresp_reg;
-	const unsigned int cmdbuff_addr_lo_reg;
-	const unsigned int cmdbuff_addr_hi_reg;
-	const unsigned int doorbell_button_reg;
-	const unsigned int doorbell_cmd_reg;
-
-};
-
 struct psp_vdata {
-	const struct sev_vdata *sev;
-	const struct tee_vdata *tee;
-	const struct platform_access_vdata *platform_access;
+	const unsigned int cmdresp_reg;
+	const unsigned int cmdbuff_addr_lo_reg;
+	const unsigned int cmdbuff_addr_hi_reg;
 	const unsigned int feature_reg;
 	const unsigned int inten_reg;
 	const unsigned int intsts_reg;
@@ -100,7 +77,6 @@ struct sp_device {
 	/* get and set master device */
 	struct sp_device*(*get_psp_master_device)(void);
 	void (*set_psp_master_device)(struct sp_device *);
-	void (*clear_psp_master_device)(struct sp_device *);
 
 	bool irq_registered;
 	bool use_tasklet;
@@ -129,7 +105,7 @@ int sp_init(struct sp_device *sp);
 void sp_destroy(struct sp_device *sp);
 struct sp_device *sp_get_master(void);
 
-int sp_suspend(struct sp_device *sp);
+int sp_suspend(struct sp_device *sp, pm_message_t state);
 int sp_resume(struct sp_device *sp);
 int sp_request_ccp_irq(struct sp_device *sp, irq_handler_t handler,
 		       const char *name, void *data);
@@ -144,8 +120,8 @@ struct sp_device *sp_get_psp_master_device(void);
 int ccp_dev_init(struct sp_device *sp);
 void ccp_dev_destroy(struct sp_device *sp);
 
-void ccp_dev_suspend(struct sp_device *sp);
-void ccp_dev_resume(struct sp_device *sp);
+int ccp_dev_suspend(struct sp_device *sp, pm_message_t state);
+int ccp_dev_resume(struct sp_device *sp);
 
 #else	/* !CONFIG_CRYPTO_DEV_SP_CCP */
 
@@ -154,8 +130,15 @@ static inline int ccp_dev_init(struct sp_device *sp)
 	return 0;
 }
 static inline void ccp_dev_destroy(struct sp_device *sp) { }
-static inline void ccp_dev_suspend(struct sp_device *sp) { }
-static inline void ccp_dev_resume(struct sp_device *sp) { }
+
+static inline int ccp_dev_suspend(struct sp_device *sp, pm_message_t state)
+{
+	return 0;
+}
+static inline int ccp_dev_resume(struct sp_device *sp)
+{
+	return 0;
+}
 #endif	/* CONFIG_CRYPTO_DEV_SP_CCP */
 
 #ifdef CONFIG_CRYPTO_DEV_SP_PSP

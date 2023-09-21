@@ -37,8 +37,10 @@ int axg_tdm_set_tdm_slots(struct snd_soc_dai *dai, u32 *tx_mask,
 			  unsigned int slot_width)
 {
 	struct axg_tdm_iface *iface = snd_soc_dai_get_drvdata(dai);
-	struct axg_tdm_stream *tx = snd_soc_dai_dma_data_get_playback(dai);
-	struct axg_tdm_stream *rx = snd_soc_dai_dma_data_get_capture(dai);
+	struct axg_tdm_stream *tx = (struct axg_tdm_stream *)
+		dai->playback_dma_data;
+	struct axg_tdm_stream *rx = (struct axg_tdm_stream *)
+		dai->capture_dma_data;
 	unsigned int tx_slots, rx_slots;
 	unsigned int fmt = 0;
 
@@ -56,17 +58,17 @@ int axg_tdm_set_tdm_slots(struct snd_soc_dai *dai, u32 *tx_mask,
 	switch (slot_width) {
 	case 0:
 		slot_width = 32;
-		fallthrough;
+		/* Fall-through */
 	case 32:
 		fmt |= SNDRV_PCM_FMTBIT_S32_LE;
-		fallthrough;
+		/* Fall-through */
 	case 24:
 		fmt |= SNDRV_PCM_FMTBIT_S24_LE;
 		fmt |= SNDRV_PCM_FMTBIT_S20_LE;
-		fallthrough;
+		/* Fall-through */
 	case 16:
 		fmt |= SNDRV_PCM_FMTBIT_S16_LE;
-		fallthrough;
+		/* Fall-through */
 	case 8:
 		fmt |= SNDRV_PCM_FMTBIT_S8;
 		break;
@@ -117,23 +119,16 @@ static int axg_tdm_iface_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
 {
 	struct axg_tdm_iface *iface = snd_soc_dai_get_drvdata(dai);
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BP_FP:
-		if (!iface->mclk) {
-			dev_err(dai->dev, "cpu clock master: mclk missing\n");
-			return -ENODEV;
-		}
-		break;
-
-	case SND_SOC_DAIFMT_BC_FC:
-		break;
-
-	case SND_SOC_DAIFMT_BP_FC:
-	case SND_SOC_DAIFMT_BC_FP:
+	/* These modes are not supported */
+	if (fmt & (SND_SOC_DAIFMT_CBS_CFM | SND_SOC_DAIFMT_CBM_CFS)) {
 		dev_err(dai->dev, "only CBS_CFS and CBM_CFM are supported\n");
-		fallthrough;
-	default:
 		return -EINVAL;
+	}
+
+	/* If the TDM interface is the clock master, it requires mclk */
+	if (!iface->mclk && (fmt & SND_SOC_DAIFMT_CBS_CFS)) {
+		dev_err(dai->dev, "cpu clock master: mclk missing\n");
+		return -ENODEV;
 	}
 
 	iface->fmt = fmt;
@@ -154,7 +149,7 @@ static int axg_tdm_iface_startup(struct snd_pcm_substream *substream,
 	}
 
 	/* Apply component wide rate symmetry */
-	if (snd_soc_component_active(dai->component)) {
+	if (dai->component->active) {
 		ret = snd_pcm_hw_constraint_single(substream->runtime,
 						   SNDRV_PCM_HW_PARAM_RATE,
 						   iface->rate);
@@ -324,8 +319,7 @@ static int axg_tdm_iface_hw_params(struct snd_pcm_substream *substream,
 	if (ret)
 		return ret;
 
-	if ((iface->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) ==
-	    SND_SOC_DAIFMT_BP_FP) {
+	if (iface->fmt & SND_SOC_DAIFMT_CBS_CFS) {
 		ret = axg_tdm_iface_set_sclk(dai, params);
 		if (ret)
 			return ret;
@@ -360,14 +354,11 @@ static int axg_tdm_iface_prepare(struct snd_pcm_substream *substream,
 
 static int axg_tdm_iface_remove_dai(struct snd_soc_dai *dai)
 {
-	int stream;
+	if (dai->capture_dma_data)
+		axg_tdm_stream_free(dai->capture_dma_data);
 
-	for_each_pcm_streams(stream) {
-		struct axg_tdm_stream *ts = snd_soc_dai_dma_data_get(dai, stream);
-
-		if (ts)
-			axg_tdm_stream_free(ts);
-	}
+	if (dai->playback_dma_data)
+		axg_tdm_stream_free(dai->playback_dma_data);
 
 	return 0;
 }
@@ -375,20 +366,19 @@ static int axg_tdm_iface_remove_dai(struct snd_soc_dai *dai)
 static int axg_tdm_iface_probe_dai(struct snd_soc_dai *dai)
 {
 	struct axg_tdm_iface *iface = snd_soc_dai_get_drvdata(dai);
-	int stream;
 
-	for_each_pcm_streams(stream) {
-		struct axg_tdm_stream *ts;
+	if (dai->capture_widget) {
+		dai->capture_dma_data = axg_tdm_stream_alloc(iface);
+		if (!dai->capture_dma_data)
+			return -ENOMEM;
+	}
 
-		if (!snd_soc_dai_get_widget(dai, stream))
-			continue;
-
-		ts = axg_tdm_stream_alloc(iface);
-		if (!ts) {
+	if (dai->playback_widget) {
+		dai->playback_dma_data = axg_tdm_stream_alloc(iface);
+		if (!dai->playback_dma_data) {
 			axg_tdm_iface_remove_dai(dai);
 			return -ENOMEM;
 		}
-		snd_soc_dai_dma_data_set(dai, stream, ts);
 	}
 
 	return 0;
@@ -469,20 +459,8 @@ static int axg_tdm_iface_set_bias_level(struct snd_soc_component *component,
 	return ret;
 }
 
-static const struct snd_soc_dapm_widget axg_tdm_iface_dapm_widgets[] = {
-	SND_SOC_DAPM_SIGGEN("Playback Signal"),
-};
-
-static const struct snd_soc_dapm_route axg_tdm_iface_dapm_routes[] = {
-	{ "Loopback", NULL, "Playback Signal" },
-};
-
 static const struct snd_soc_component_driver axg_tdm_iface_component_drv = {
-	.dapm_widgets		= axg_tdm_iface_dapm_widgets,
-	.num_dapm_widgets	= ARRAY_SIZE(axg_tdm_iface_dapm_widgets),
-	.dapm_routes		= axg_tdm_iface_dapm_routes,
-	.num_dapm_routes	= ARRAY_SIZE(axg_tdm_iface_dapm_routes),
-	.set_bias_level		= axg_tdm_iface_set_bias_level,
+	.set_bias_level	= axg_tdm_iface_set_bias_level,
 };
 
 static const struct of_device_id axg_tdm_iface_of_match[] = {
@@ -496,7 +474,7 @@ static int axg_tdm_iface_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct snd_soc_dai_driver *dai_drv;
 	struct axg_tdm_iface *iface;
-	int i;
+	int ret, i;
 
 	iface = devm_kzalloc(dev, sizeof(*iface), GFP_KERNEL);
 	if (!iface)
@@ -519,13 +497,21 @@ static int axg_tdm_iface_probe(struct platform_device *pdev)
 
 	/* Bit clock provided on the pad */
 	iface->sclk = devm_clk_get(dev, "sclk");
-	if (IS_ERR(iface->sclk))
-		return dev_err_probe(dev, PTR_ERR(iface->sclk), "failed to get sclk\n");
+	if (IS_ERR(iface->sclk)) {
+		ret = PTR_ERR(iface->sclk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "failed to get sclk: %d\n", ret);
+		return ret;
+	}
 
 	/* Sample clock provided on the pad */
 	iface->lrclk = devm_clk_get(dev, "lrclk");
-	if (IS_ERR(iface->lrclk))
-		return dev_err_probe(dev, PTR_ERR(iface->lrclk), "failed to get lrclk\n");
+	if (IS_ERR(iface->lrclk)) {
+		ret = PTR_ERR(iface->lrclk);
+		if (ret != -EPROBE_DEFER)
+			dev_err(dev, "failed to get lrclk: %d\n", ret);
+		return ret;
+	}
 
 	/*
 	 * mclk maybe be missing when the cpu dai is in slave mode and
@@ -533,9 +519,17 @@ static int axg_tdm_iface_probe(struct platform_device *pdev)
 	 * At this point, ignore the error if mclk is missing. We'll
 	 * throw an error if the cpu dai is master and mclk is missing
 	 */
-	iface->mclk = devm_clk_get_optional(dev, "mclk");
-	if (IS_ERR(iface->mclk))
-		return dev_err_probe(dev, PTR_ERR(iface->mclk), "failed to get mclk\n");
+	iface->mclk = devm_clk_get(dev, "mclk");
+	if (IS_ERR(iface->mclk)) {
+		ret = PTR_ERR(iface->mclk);
+		if (ret == -ENOENT) {
+			iface->mclk = NULL;
+		} else {
+			if (ret != -EPROBE_DEFER)
+				dev_err(dev, "failed to get mclk: %d\n", ret);
+			return ret;
+		}
+	}
 
 	return devm_snd_soc_register_component(dev,
 					&axg_tdm_iface_component_drv, dai_drv,

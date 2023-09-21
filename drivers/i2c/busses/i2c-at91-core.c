@@ -66,26 +66,40 @@ static struct at91_twi_pdata at91rm9200_config = {
 	.clk_max_div = 5,
 	.clk_offset = 3,
 	.has_unre_flag = true,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static struct at91_twi_pdata at91sam9261_config = {
 	.clk_max_div = 5,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static struct at91_twi_pdata at91sam9260_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static struct at91_twi_pdata at91sam9g20_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static struct at91_twi_pdata at91sam9g10_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static const struct platform_device_id at91_twi_devtypes[] = {
@@ -113,13 +127,17 @@ static const struct platform_device_id at91_twi_devtypes[] = {
 static struct at91_twi_pdata at91sam9x5_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
+	.has_hold_field = false,
 };
 
 static struct at91_twi_pdata sama5d4_config = {
 	.clk_max_div = 7,
 	.clk_offset = 4,
+	.has_unre_flag = false,
+	.has_alt_cmd = false,
 	.has_hold_field = true,
-	.has_dig_filtr = true,
 };
 
 static struct at91_twi_pdata sama5d2_config = {
@@ -128,22 +146,6 @@ static struct at91_twi_pdata sama5d2_config = {
 	.has_unre_flag = true,
 	.has_alt_cmd = true,
 	.has_hold_field = true,
-	.has_dig_filtr = true,
-	.has_adv_dig_filtr = true,
-	.has_ana_filtr = true,
-	.has_clear_cmd = false,	/* due to errata, CLEAR cmd is not working */
-};
-
-static struct at91_twi_pdata sam9x60_config = {
-	.clk_max_div = 7,
-	.clk_offset = 3,
-	.has_unre_flag = true,
-	.has_alt_cmd = true,
-	.has_hold_field = true,
-	.has_dig_filtr = true,
-	.has_adv_dig_filtr = true,
-	.has_ana_filtr = true,
-	.has_clear_cmd = true,
 };
 
 static const struct of_device_id atmel_twi_dt_ids[] = {
@@ -171,9 +173,6 @@ static const struct of_device_id atmel_twi_dt_ids[] = {
 	}, {
 		.compatible = "atmel,sama5d2-i2c",
 		.data = &sama5d2_config,
-	}, {
-		.compatible = "microchip,sam9x60-i2c",
-		.data = &sam9x60_config,
 	}, {
 		/* sentinel */
 	}
@@ -286,7 +285,9 @@ static int at91_twi_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
+#ifdef CONFIG_PM
+
+static int at91_twi_runtime_suspend(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -297,7 +298,7 @@ static int __maybe_unused at91_twi_runtime_suspend(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
+static int at91_twi_runtime_resume(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 
@@ -306,7 +307,7 @@ static int __maybe_unused at91_twi_runtime_resume(struct device *dev)
 	return clk_prepare_enable(twi_dev->clk);
 }
 
-static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
+static int at91_twi_suspend_noirq(struct device *dev)
 {
 	if (!pm_runtime_status_suspended(dev))
 		at91_twi_runtime_suspend(dev);
@@ -314,7 +315,7 @@ static int __maybe_unused at91_twi_suspend_noirq(struct device *dev)
 	return 0;
 }
 
-static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
+static int at91_twi_resume_noirq(struct device *dev)
 {
 	struct at91_twi_dev *twi_dev = dev_get_drvdata(dev);
 	int ret;
@@ -333,12 +334,17 @@ static int __maybe_unused at91_twi_resume_noirq(struct device *dev)
 	return 0;
 }
 
-static const struct dev_pm_ops __maybe_unused at91_twi_pm = {
+static const struct dev_pm_ops at91_twi_pm = {
 	.suspend_noirq	= at91_twi_suspend_noirq,
 	.resume_noirq	= at91_twi_resume_noirq,
 	.runtime_suspend	= at91_twi_runtime_suspend,
 	.runtime_resume		= at91_twi_runtime_resume,
 };
+
+#define at91_twi_pm_ops (&at91_twi_pm)
+#else
+#define at91_twi_pm_ops NULL
+#endif
 
 static struct platform_driver at91_twi_driver = {
 	.probe		= at91_twi_probe,
@@ -347,7 +353,7 @@ static struct platform_driver at91_twi_driver = {
 	.driver		= {
 		.name	= "at91_i2c",
 		.of_match_table = of_match_ptr(atmel_twi_dt_ids),
-		.pm	= pm_ptr(&at91_twi_pm),
+		.pm	= at91_twi_pm_ops,
 	},
 };
 

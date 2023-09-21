@@ -419,7 +419,7 @@ static int arcfb_ioctl(struct fb_info *info,
 			schedule();
 			finish_wait(&arcfb_waitq, &wait);
 		}
-		fallthrough;
+		/* fall through */
 
 		case FBIO_GETCONTROL2:
 		{
@@ -446,7 +446,7 @@ static ssize_t arcfb_write(struct fb_info *info, const char __user *buf,
 	/* modded from epson 1355 */
 
 	unsigned long p;
-	int err;
+	int err=-EINVAL;
 	unsigned int fbmemlength,x,y,w,h, bitppos, startpos, endpos, bitcount;
 	struct arcfb_par *par;
 	unsigned int xres;
@@ -491,7 +491,7 @@ static ssize_t arcfb_write(struct fb_info *info, const char __user *buf,
 	return err;
 }
 
-static const struct fb_ops arcfb_ops = {
+static struct fb_ops arcfb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_open	= arcfb_open,
 	.fb_read        = fb_sys_read,
@@ -523,7 +523,7 @@ static int arcfb_probe(struct platform_device *dev)
 
 	info = framebuffer_alloc(sizeof(struct arcfb_par), &dev->dev);
 	if (!info)
-		goto err_fb_alloc;
+		goto err;
 
 	info->screen_base = (char __iomem *)videomemory;
 	info->fbops = &arcfb_ops;
@@ -535,7 +535,7 @@ static int arcfb_probe(struct platform_device *dev)
 
 	if (!dio_addr || !cio_addr || !c2io_addr) {
 		printk(KERN_WARNING "no IO addresses supplied\n");
-		goto err_addr;
+		goto err1;
 	}
 	par->dio_addr = dio_addr;
 	par->cio_addr = cio_addr;
@@ -544,6 +544,10 @@ static int arcfb_probe(struct platform_device *dev)
 	par->cslut[1] = 0x06;
 	info->flags = FBINFO_FLAG_DEFAULT;
 	spin_lock_init(&par->lock);
+	retval = register_framebuffer(info);
+	if (retval < 0)
+		goto err1;
+	platform_set_drvdata(dev, info);
 	if (irq) {
 		par->irq = irq;
 		if (request_irq(par->irq, &arcfb_interrupt, IRQF_SHARED,
@@ -551,13 +555,9 @@ static int arcfb_probe(struct platform_device *dev)
 			printk(KERN_INFO
 				"arcfb: Failed req IRQ %d\n", par->irq);
 			retval = -EBUSY;
-			goto err_addr;
+			goto err1;
 		}
 	}
-	retval = register_framebuffer(info);
-	if (retval < 0)
-		goto err_register_fb;
-	platform_set_drvdata(dev, info);
 	fb_info(info, "Arc frame buffer device, using %dK of video memory\n",
 		videomemorysize >> 10);
 
@@ -580,32 +580,28 @@ static int arcfb_probe(struct platform_device *dev)
 	}
 
 	return 0;
-
-err_register_fb:
-	free_irq(par->irq, info);
-err_addr:
+err1:
 	framebuffer_release(info);
-err_fb_alloc:
+err:
 	vfree(videomemory);
 	return retval;
 }
 
-static void arcfb_remove(struct platform_device *dev)
+static int arcfb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
 
 	if (info) {
 		unregister_framebuffer(info);
-		if (irq)
-			free_irq(((struct arcfb_par *)(info->par))->irq, info);
 		vfree((void __force *)info->screen_base);
 		framebuffer_release(info);
 	}
+	return 0;
 }
 
 static struct platform_driver arcfb_driver = {
 	.probe	= arcfb_probe,
-	.remove_new = arcfb_remove,
+	.remove = arcfb_remove,
 	.driver	= {
 		.name	= "arcfb",
 	},

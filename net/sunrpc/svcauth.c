@@ -19,10 +19,6 @@
 #include <linux/err.h>
 #include <linux/hash.h>
 
-#include <trace/events/sunrpc.h>
-
-#include "sunrpc.h"
-
 #define RPCDBG_FACILITY	RPCDBG_AUTH
 
 
@@ -31,12 +27,10 @@
  */
 extern struct auth_ops svcauth_null;
 extern struct auth_ops svcauth_unix;
-extern struct auth_ops svcauth_tls;
 
 static struct auth_ops __rcu *authtab[RPC_AUTH_MAXFLAVOR] = {
 	[RPC_AUTH_NULL] = (struct auth_ops __force __rcu *)&svcauth_null,
 	[RPC_AUTH_UNIX] = (struct auth_ops __force __rcu *)&svcauth_unix,
-	[RPC_AUTH_TLS]  = (struct auth_ops __force __rcu *)&svcauth_tls,
 };
 
 static struct auth_ops *
@@ -61,23 +55,20 @@ svc_put_auth_ops(struct auth_ops *aops)
 }
 
 int
-svc_authenticate(struct svc_rqst *rqstp)
+svc_authenticate(struct svc_rqst *rqstp, __be32 *authp)
 {
-	struct auth_ops *aops;
-	u32 flavor;
+	rpc_authflavor_t	flavor;
+	struct auth_ops		*aops;
 
-	rqstp->rq_auth_stat = rpc_auth_ok;
+	*authp = rpc_auth_ok;
 
-	/*
-	 * Decode the Call credential's flavor field. The credential's
-	 * body field is decoded in the chosen ->accept method below.
-	 */
-	if (xdr_stream_decode_u32(&rqstp->rq_arg_stream, &flavor) < 0)
-		return SVC_GARBAGE;
+	flavor = svc_getnl(&rqstp->rq_arg.head[0]);
+
+	dprintk("svc: svc_authenticate (%d)\n", flavor);
 
 	aops = svc_get_auth_ops(flavor);
 	if (aops == NULL) {
-		rqstp->rq_auth_stat = rpc_autherr_badcred;
+		*authp = rpc_autherr_badcred;
 		return SVC_DENIED;
 	}
 
@@ -85,7 +76,7 @@ svc_authenticate(struct svc_rqst *rqstp)
 	init_svc_cred(&rqstp->rq_cred);
 
 	rqstp->rq_authop = aops;
-	return aops->accept(rqstp);
+	return aops->accept(rqstp, authp);
 }
 EXPORT_SYMBOL_GPL(svc_authenticate);
 
@@ -212,26 +203,3 @@ struct auth_domain *auth_domain_find(char *name)
 	return NULL;
 }
 EXPORT_SYMBOL_GPL(auth_domain_find);
-
-/**
- * auth_domain_cleanup - check that the auth_domain table is empty
- *
- * On module unload the auth_domain_table must be empty.  To make it
- * easier to catch bugs which don't clean up domains properly, we
- * warn if anything remains in the table at cleanup time.
- *
- * Note that we cannot proactively remove the domains at this stage.
- * The ->release() function might be in a module that has already been
- * unloaded.
- */
-
-void auth_domain_cleanup(void)
-{
-	int h;
-	struct auth_domain *hp;
-
-	for (h = 0; h < DN_HASHMAX; h++)
-		hlist_for_each_entry(hp, &auth_domain_table[h], hash)
-			pr_warn("svc: domain %s still present at module unload.\n",
-				hp->name);
-}

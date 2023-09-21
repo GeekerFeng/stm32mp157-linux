@@ -1,14 +1,20 @@
 #include <dt-bindings/power/raspberrypi-power.h>
 
 / {
+	leds {
+		compatible = "gpio-leds";
+
+		act {
+			label = "ACT";
+			default-state = "keep";
+			linux,default-trigger = "heartbeat";
+		};
+	};
+
 	soc {
 		firmware: firmware {
-			compatible = "raspberrypi,bcm2835-firmware", "simple-mfd";
-			#address-cells = <1>;
-			#size-cells = <1>;
-
+			compatible = "raspberrypi,bcm2835-firmware", "simple-bus";
 			mboxes = <&mailbox>;
-			dma-ranges;
 		};
 
 		power: power {
@@ -51,6 +57,10 @@
 	pinctrl-0 = <&i2c1_gpio2>;
 	status = "okay";
 	clock-frequency = <100000>;
+};
+
+&i2c2 {
+	status = "okay";
 };
 
 &usb {

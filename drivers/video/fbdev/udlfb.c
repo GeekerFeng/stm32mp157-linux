@@ -27,8 +27,6 @@
 #include <video/udlfb.h>
 #include "edid.h"
 
-#define OUT_EP_NUM	1	/* The endpoint number we will use */
-
 static const struct fb_fix_screeninfo dlfb_fix = {
 	.id =           "udlfb",
 	.type =         FB_TYPE_PACKED_PIXELS,
@@ -66,9 +64,9 @@ static const struct usb_device_id id_table[] = {
 MODULE_DEVICE_TABLE(usb, id_table);
 
 /* module options */
-static bool console = true; /* Allow fbcon to open framebuffer */
-static bool fb_defio = true;  /* Detect mmap writes using page faults */
-static bool shadow = true; /* Optionally disable shadow framebuffer */
+static bool console = 1; /* Allow fbcon to open framebuffer */
+static bool fb_defio = 1;  /* Detect mmap writes using page faults */
+static bool shadow = 1; /* Optionally disable shadow framebuffer */
 static int pixel_limit; /* Optionally force a pixel resolution limit */
 
 struct dlfb_deferred_free {
@@ -328,9 +326,6 @@ static int dlfb_ops_mmap(struct fb_info *info, struct vm_area_struct *vma)
 	unsigned long offset = vma->vm_pgoff << PAGE_SHIFT;
 	unsigned long page, pos;
 
-	if (info->fbdefio)
-		return fb_deferred_io_mmap(info, vma);
-
 	if (vma->vm_pgoff > (~0UL >> PAGE_SHIFT))
 		return -EINVAL;
 	if (size > info->fix.smem_len)
@@ -372,7 +367,7 @@ static int dlfb_trim_hline(const u8 *bback, const u8 **bfront, int *width_bytes)
 	const unsigned long *back = (const unsigned long *) bback;
 	const unsigned long *front = (const unsigned long *) *bfront;
 	const int width = *width_bytes / sizeof(unsigned long);
-	int identical;
+	int identical = width;
 	int start = width;
 	int end = width;
 
@@ -783,9 +778,11 @@ static void dlfb_ops_fillrect(struct fb_info *info,
  *   in fb_defio will cause a deadlock, when it also tries to
  *   grab the same mutex.
  */
-static void dlfb_dpy_deferred_io(struct fb_info *info, struct list_head *pagereflist)
+static void dlfb_dpy_deferred_io(struct fb_info *info,
+				struct list_head *pagelist)
 {
-	struct fb_deferred_io_pageref *pageref;
+	struct page *cur;
+	struct fb_deferred_io *fbdefio = info->fbdefio;
 	struct dlfb_data *dlfb = info->par;
 	struct urb *urb;
 	char *cmd;
@@ -811,10 +808,11 @@ static void dlfb_dpy_deferred_io(struct fb_info *info, struct list_head *pageref
 	cmd = urb->transfer_buffer;
 
 	/* walk the written page list and render each to device */
-	list_for_each_entry(pageref, pagereflist, list) {
+	list_for_each_entry(cur, &fbdefio->pagelist, lru) {
+
 		if (dlfb_render_hline(dlfb, &urb, (char *) info->fix.smem_start,
-				      &cmd, pageref->offset, PAGE_SIZE,
-				      &bytes_identical, &bytes_sent))
+				  &cmd, cur->index << PAGE_SHIFT,
+				  PAGE_SIZE, &bytes_identical, &bytes_sent))
 			goto error;
 		bytes_rendered += PAGE_SIZE;
 	}
@@ -982,7 +980,6 @@ static int dlfb_ops_open(struct fb_info *info, int user)
 
 		if (fbdefio) {
 			fbdefio->delay = DL_DEFIO_WRITE_DELAY;
-			fbdefio->sort_pagereflist = true;
 			fbdefio->deferred_io = dlfb_dpy_deferred_io;
 		}
 
@@ -1020,7 +1017,6 @@ static void dlfb_ops_destroy(struct fb_info *info)
 	}
 	vfree(dlfb->backing_buffer);
 	kfree(dlfb->edid);
-	dlfb_free_urb_list(dlfb);
 	usb_put_dev(dlfb->udev);
 	kfree(dlfb);
 
@@ -1041,6 +1037,7 @@ static int dlfb_ops_release(struct fb_info *info, int user)
 		fb_deferred_io_cleanup(info);
 		kfree(info->fbdefio);
 		info->fbdefio = NULL;
+		info->fbops->fb_mmap = dlfb_ops_mmap;
 	}
 
 	dev_dbg(info->dev, "release, user=%d count=%d\n", user, dlfb->fb_count);
@@ -1429,7 +1426,7 @@ static ssize_t metrics_bytes_rendered_show(struct device *fbdev,
 				   struct device_attribute *a, char *buf) {
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
-	return sysfs_emit(buf, "%u\n",
+	return snprintf(buf, PAGE_SIZE, "%u\n",
 			atomic_read(&dlfb->bytes_rendered));
 }
 
@@ -1437,7 +1434,7 @@ static ssize_t metrics_bytes_identical_show(struct device *fbdev,
 				   struct device_attribute *a, char *buf) {
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
-	return sysfs_emit(buf, "%u\n",
+	return snprintf(buf, PAGE_SIZE, "%u\n",
 			atomic_read(&dlfb->bytes_identical));
 }
 
@@ -1445,7 +1442,7 @@ static ssize_t metrics_bytes_sent_show(struct device *fbdev,
 				   struct device_attribute *a, char *buf) {
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
-	return sysfs_emit(buf, "%u\n",
+	return snprintf(buf, PAGE_SIZE, "%u\n",
 			atomic_read(&dlfb->bytes_sent));
 }
 
@@ -1453,7 +1450,7 @@ static ssize_t metrics_cpu_kcycles_used_show(struct device *fbdev,
 				   struct device_attribute *a, char *buf) {
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
-	return sysfs_emit(buf, "%u\n",
+	return snprintf(buf, PAGE_SIZE, "%u\n",
 			atomic_read(&dlfb->cpu_kcycles_used));
 }
 
@@ -1461,7 +1458,7 @@ static ssize_t edid_show(
 			struct file *filp,
 			struct kobject *kobj, struct bin_attribute *a,
 			 char *buf, loff_t off, size_t count) {
-	struct device *fbdev = kobj_to_dev(kobj);
+	struct device *fbdev = container_of(kobj, struct device, kobj);
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
 
@@ -1483,7 +1480,7 @@ static ssize_t edid_store(
 			struct file *filp,
 			struct kobject *kobj, struct bin_attribute *a,
 			char *src, loff_t src_off, size_t src_size) {
-	struct device *fbdev = kobj_to_dev(kobj);
+	struct device *fbdev = container_of(kobj, struct device, kobj);
 	struct fb_info *fb_info = dev_get_drvdata(fbdev);
 	struct dlfb_data *dlfb = fb_info->par;
 	int ret;
@@ -1543,16 +1540,24 @@ static const struct device_attribute fb_device_attrs[] = {
 static int dlfb_select_std_channel(struct dlfb_data *dlfb)
 {
 	int ret;
+	void *buf;
 	static const u8 set_def_chn[] = {
 				0x57, 0xCD, 0xDC, 0xA7,
 				0x1C, 0x88, 0x5E, 0x15,
 				0x60, 0xFE, 0xC6, 0x97,
 				0x16, 0x3D, 0x47, 0xF2  };
 
-	ret = usb_control_msg_send(dlfb->udev, 0, NR_USB_REQUEST_CHANNEL,
+	buf = kmemdup(set_def_chn, sizeof(set_def_chn), GFP_KERNEL);
+
+	if (!buf)
+		return -ENOMEM;
+
+	ret = usb_control_msg(dlfb->udev, usb_sndctrlpipe(dlfb->udev, 0),
+			NR_USB_REQUEST_CHANNEL,
 			(USB_DIR_OUT | USB_TYPE_VENDOR), 0, 0,
-			&set_def_chn, sizeof(set_def_chn), USB_CTRL_SET_TIMEOUT,
-			GFP_KERNEL);
+			buf, sizeof(set_def_chn), USB_CTRL_SET_TIMEOUT);
+
+	kfree(buf);
 
 	return ret;
 }
@@ -1644,9 +1649,8 @@ static int dlfb_usb_probe(struct usb_interface *intf,
 	const struct device_attribute *attr;
 	struct dlfb_data *dlfb;
 	struct fb_info *info;
-	int retval;
+	int retval = -ENOMEM;
 	struct usb_device *usbdev = interface_to_usbdev(intf);
-	static u8 out_ep[] = {OUT_EP_NUM + USB_DIR_OUT, 0};
 
 	/* usb initialization */
 	dlfb = kzalloc(sizeof(*dlfb), GFP_KERNEL);
@@ -1660,12 +1664,6 @@ static int dlfb_usb_probe(struct usb_interface *intf,
 	dlfb->udev = usb_get_dev(usbdev);
 	usb_set_intfdata(intf, dlfb);
 
-	if (!usb_check_bulk_endpoints(intf, out_ep)) {
-		dev_err(&intf->dev, "Invalid DisplayLink device!\n");
-		retval = -EINVAL;
-		goto error;
-	}
-
 	dev_dbg(&intf->dev, "console enable=%d\n", console);
 	dev_dbg(&intf->dev, "fb_defio enable=%d\n", fb_defio);
 	dev_dbg(&intf->dev, "shadow enable=%d\n", shadow);
@@ -1675,7 +1673,6 @@ static int dlfb_usb_probe(struct usb_interface *intf,
 	if (!dlfb_parse_vendor_descriptor(dlfb, intf)) {
 		dev_err(&intf->dev,
 			"firmware not recognized, incompatible device?\n");
-		retval = -ENODEV;
 		goto error;
 	}
 
@@ -1689,10 +1686,8 @@ static int dlfb_usb_probe(struct usb_interface *intf,
 
 	/* allocates framebuffer driver structure, not framebuffer memory */
 	info = framebuffer_alloc(0, &dlfb->udev->dev);
-	if (!info) {
-		retval = -ENOMEM;
+	if (!info)
 		goto error;
-	}
 
 	dlfb->info = info;
 	info->par = dlfb;
@@ -1921,8 +1916,7 @@ retry:
 		}
 
 		/* urb->transfer_buffer_length set to actual before submit */
-		usb_fill_bulk_urb(urb, dlfb->udev,
-			usb_sndbulkpipe(dlfb->udev, OUT_EP_NUM),
+		usb_fill_bulk_urb(urb, dlfb->udev, usb_sndbulkpipe(dlfb->udev, 1),
 			buf, size, dlfb_urb_completion, unode);
 		urb->transfer_flags |= URB_NO_TRANSFER_DMA_MAP;
 

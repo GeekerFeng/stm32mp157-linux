@@ -13,7 +13,6 @@
 #include <net/udp.h>
 #include <net/ip6_checksum.h>
 #include "ip6_offload.h"
-#include <net/gro.h>
 
 static struct sk_buff *udp6_ufo_fragment(struct sk_buff *skb,
 					 netdev_features_t features)
@@ -29,6 +28,10 @@ static struct sk_buff *udp6_ufo_fragment(struct sk_buff *skb,
 	int tnl_hlen;
 	int err;
 
+	mss = skb_shinfo(skb)->gso_size;
+	if (unlikely(skb->len <= mss))
+		goto out;
+
 	if (skb->encapsulation && skb_shinfo(skb)->gso_type &
 	    (SKB_GSO_UDP_TUNNEL|SKB_GSO_UDP_TUNNEL_CSUM))
 		segs = skb_udp_tunnel_segment(skb, features, true);
@@ -42,13 +45,8 @@ static struct sk_buff *udp6_ufo_fragment(struct sk_buff *skb,
 		if (!pskb_may_pull(skb, sizeof(struct udphdr)))
 			goto out;
 
-		if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4 &&
-		    !skb_gso_ok(skb, features | NETIF_F_GSO_ROBUST))
-			return __udp_gso_segment(skb, features, true);
-
-		mss = skb_shinfo(skb)->gso_size;
-		if (unlikely(skb->len <= mss))
-			goto out;
+		if (skb_shinfo(skb)->gso_type & SKB_GSO_UDP_L4)
+			return __udp_gso_segment(skb, features);
 
 		/* Do software UFO. Complete and fill in the UDP checksum as HW cannot
 		 * do checksum of UDP packets sent as multiple IP fragments.
@@ -113,25 +111,12 @@ out:
 	return segs;
 }
 
-static struct sock *udp6_gro_lookup_skb(struct sk_buff *skb, __be16 sport,
-					__be16 dport)
-{
-	const struct ipv6hdr *iph = skb_gro_network_header(skb);
-	struct net *net = dev_net(skb->dev);
-
-	return __udp6_lib_lookup(net, &iph->saddr, sport,
-				 &iph->daddr, dport, inet6_iif(skb),
-				 inet6_sdif(skb), net->ipv4.udp_table, NULL);
-}
-
 INDIRECT_CALLABLE_SCOPE
 struct sk_buff *udp6_gro_receive(struct list_head *head, struct sk_buff *skb)
 {
 	struct udphdr *uh = udp_gro_udphdr(skb);
-	struct sock *sk = NULL;
-	struct sk_buff *pp;
 
-	if (unlikely(!uh))
+	if (unlikely(!uh) || !static_branch_unlikely(&udpv6_encap_needed_key))
 		goto flush;
 
 	/* Don't bother verifying checksum if we're going to flush anyway. */
@@ -142,17 +127,12 @@ struct sk_buff *udp6_gro_receive(struct list_head *head, struct sk_buff *skb)
 						 ip6_gro_compute_pseudo))
 		goto flush;
 	else if (uh->check)
-		skb_gro_checksum_try_convert(skb, IPPROTO_UDP,
+		skb_gro_checksum_try_convert(skb, IPPROTO_UDP, uh->check,
 					     ip6_gro_compute_pseudo);
 
 skip:
 	NAPI_GRO_CB(skb)->is_ipv6 = 1;
-
-	if (static_branch_unlikely(&udpv6_encap_needed_key))
-		sk = udp6_gro_lookup_skb(skb, uh->source, uh->dest);
-
-	pp = udp_gro_receive(head, skb, uh, sk);
-	return pp;
+	return udp_gro_receive(head, skb, uh, udp6_lib_lookup_skb);
 
 flush:
 	NAPI_GRO_CB(skb)->flush = 1;
@@ -163,24 +143,6 @@ INDIRECT_CALLABLE_SCOPE int udp6_gro_complete(struct sk_buff *skb, int nhoff)
 {
 	const struct ipv6hdr *ipv6h = ipv6_hdr(skb);
 	struct udphdr *uh = (struct udphdr *)(skb->data + nhoff);
-
-	/* do fraglist only if there is no outer UDP encap (or we already processed it) */
-	if (NAPI_GRO_CB(skb)->is_flist && !NAPI_GRO_CB(skb)->encap_mark) {
-		uh->len = htons(skb->len - nhoff);
-
-		skb_shinfo(skb)->gso_type |= (SKB_GSO_FRAGLIST|SKB_GSO_UDP_L4);
-		skb_shinfo(skb)->gso_segs = NAPI_GRO_CB(skb)->count;
-
-		if (skb->ip_summed == CHECKSUM_UNNECESSARY) {
-			if (skb->csum_level < SKB_MAX_CSUM_LEVEL)
-				skb->csum_level++;
-		} else {
-			skb->ip_summed = CHECKSUM_UNNECESSARY;
-			skb->csum_level = 0;
-		}
-
-		return 0;
-	}
 
 	if (uh->check)
 		uh->check = ~udp_v6_check(skb->len - nhoff, &ipv6h->saddr,

@@ -20,7 +20,7 @@
 
 	leds {
 		compatible = "gpio-leds";
-		led-user0 {
+		user0 {
 			label = "user0";
 			gpios = <&twl_gpio 18 GPIO_ACTIVE_LOW>;	/* LEDA */
 			linux,default-trigger = "none";
@@ -33,11 +33,6 @@
 		compatible = "fixed-clock";
 		clock-frequency = <26000000>;
 	};
-};
-
-/* The Torpedo doesn't route the USB host pins */
-&usbhshost {
-	status = "disabled";
 };
 
 &gpmc {

@@ -29,7 +29,7 @@ struct gb_raw {
 struct raw_data {
 	struct list_head entry;
 	u32 len;
-	u8 data[];
+	u8 data[0];
 };
 
 static struct class *raw_class;
@@ -340,7 +340,7 @@ static int raw_init(void)
 	dev_t dev;
 	int retval;
 
-	raw_class = class_create("gb_raw");
+	raw_class = class_create(THIS_MODULE, "gb_raw");
 	if (IS_ERR(raw_class)) {
 		retval = PTR_ERR(raw_class);
 		goto error_class;

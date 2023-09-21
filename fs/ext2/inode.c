@@ -355,7 +355,8 @@ static inline ext2_fsblk_t ext2_find_goal(struct inode *inode, long block,
  *	@blks: number of data blocks to be mapped.
  *	@blocks_to_boundary:  the offset in the indirect block
  *
- *	return the number of direct blocks to allocate.
+ *	return the total number of blocks to be allocate, including the
+ *	direct and indirect blocks.
  */
 static int
 ext2_blks_to_allocate(Indirect * branch, int k, unsigned long blks,
@@ -388,9 +389,11 @@ ext2_blks_to_allocate(Indirect * branch, int k, unsigned long blks,
  *	ext2_alloc_blocks: multiple allocate blocks needed for a branch
  *	@indirect_blks: the number of blocks need to allocate for indirect
  *			blocks
- *	@blks: the number of blocks need to allocate for direct blocks
+ *
  *	@new_blocks: on return it will store the new block numbers for
  *	the indirect blocks(if needed) and the first direct block,
+ *	@blks:	on return it will store the total number of allocated
+ *		direct blocks
  */
 static int ext2_alloc_blocks(struct inode *inode,
 			ext2_fsblk_t goal, int indirect_blks, int blks,
@@ -799,8 +802,9 @@ int ext2_get_block(struct inode *inode, sector_t iblock,
 
 }
 
+#ifdef CONFIG_FS_DAX
 static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
-		unsigned flags, struct iomap *iomap, struct iomap *srcmap)
+		unsigned flags, struct iomap *iomap)
 {
 	unsigned int blkbits = inode->i_blkbits;
 	unsigned long first_block = offset >> blkbits;
@@ -816,11 +820,9 @@ static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 		return ret;
 
 	iomap->flags = 0;
+	iomap->bdev = inode->i_sb->s_bdev;
 	iomap->offset = (u64)first_block << blkbits;
-	if (flags & IOMAP_DAX)
-		iomap->dax_dev = sbi->s_daxdev;
-	else
-		iomap->bdev = inode->i_sb->s_bdev;
+	iomap->dax_dev = sbi->s_daxdev;
 
 	if (ret == 0) {
 		iomap->type = IOMAP_HOLE;
@@ -829,8 +831,6 @@ static int ext2_iomap_begin(struct inode *inode, loff_t offset, loff_t length,
 	} else {
 		iomap->type = IOMAP_MAPPED;
 		iomap->addr = (u64)bno << blkbits;
-		if (flags & IOMAP_DAX)
-			iomap->addr += sbi->s_dax_part_off;
 		iomap->length = (u64)ret << blkbits;
 		iomap->flags |= IOMAP_F_MERGED;
 	}
@@ -855,37 +855,44 @@ const struct iomap_ops ext2_iomap_ops = {
 	.iomap_begin		= ext2_iomap_begin,
 	.iomap_end		= ext2_iomap_end,
 };
+#else
+/* Define empty ops for !CONFIG_FS_DAX case to avoid ugly ifdefs */
+const struct iomap_ops ext2_iomap_ops;
+#endif /* CONFIG_FS_DAX */
 
 int ext2_fiemap(struct inode *inode, struct fiemap_extent_info *fieinfo,
 		u64 start, u64 len)
 {
-	int ret;
-
-	inode_lock(inode);
-	len = min_t(u64, len, i_size_read(inode));
-	ret = iomap_fiemap(inode, fieinfo, start, len, &ext2_iomap_ops);
-	inode_unlock(inode);
-
-	return ret;
+	return generic_block_fiemap(inode, fieinfo, start, len,
+				    ext2_get_block);
 }
 
-static int ext2_read_folio(struct file *file, struct folio *folio)
+static int ext2_writepage(struct page *page, struct writeback_control *wbc)
 {
-	return mpage_read_folio(folio, ext2_get_block);
+	return block_write_full_page(page, ext2_get_block, wbc);
 }
 
-static void ext2_readahead(struct readahead_control *rac)
+static int ext2_readpage(struct file *file, struct page *page)
 {
-	mpage_readahead(rac, ext2_get_block);
+	return mpage_readpage(page, ext2_get_block);
+}
+
+static int
+ext2_readpages(struct file *file, struct address_space *mapping,
+		struct list_head *pages, unsigned nr_pages)
+{
+	return mpage_readpages(mapping, pages, nr_pages, ext2_get_block);
 }
 
 static int
 ext2_write_begin(struct file *file, struct address_space *mapping,
-		loff_t pos, unsigned len, struct page **pagep, void **fsdata)
+		loff_t pos, unsigned len, unsigned flags,
+		struct page **pagep, void **fsdata)
 {
 	int ret;
 
-	ret = block_write_begin(mapping, pos, len, pagep, ext2_get_block);
+	ret = block_write_begin(mapping, pos, len, flags, pagep,
+				ext2_get_block);
 	if (ret < 0)
 		ext2_write_failed(mapping, pos + len);
 	return ret;
@@ -901,6 +908,26 @@ static int ext2_write_end(struct file *file, struct address_space *mapping,
 	if (ret < len)
 		ext2_write_failed(mapping, pos + len);
 	return ret;
+}
+
+static int
+ext2_nobh_write_begin(struct file *file, struct address_space *mapping,
+		loff_t pos, unsigned len, unsigned flags,
+		struct page **pagep, void **fsdata)
+{
+	int ret;
+
+	ret = nobh_write_begin(mapping, pos, len, flags, pagep, fsdata,
+			       ext2_get_block);
+	if (ret < 0)
+		ext2_write_failed(mapping, pos + len);
+	return ret;
+}
+
+static int ext2_nobh_writepage(struct page *page,
+			struct writeback_control *wbc)
+{
+	return nobh_writepage(page, ext2_get_block, wbc);
 }
 
 static sector_t ext2_bmap(struct address_space *mapping, sector_t block)
@@ -933,30 +960,42 @@ ext2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 static int
 ext2_dax_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
-	struct ext2_sb_info *sbi = EXT2_SB(mapping->host->i_sb);
-
-	return dax_writeback_mapping_range(mapping, sbi->s_daxdev, wbc);
+	return dax_writeback_mapping_range(mapping,
+			mapping->host->i_sb->s_bdev, wbc);
 }
 
 const struct address_space_operations ext2_aops = {
-	.dirty_folio		= block_dirty_folio,
-	.invalidate_folio	= block_invalidate_folio,
-	.read_folio		= ext2_read_folio,
-	.readahead		= ext2_readahead,
+	.readpage		= ext2_readpage,
+	.readpages		= ext2_readpages,
+	.writepage		= ext2_writepage,
 	.write_begin		= ext2_write_begin,
 	.write_end		= ext2_write_end,
 	.bmap			= ext2_bmap,
 	.direct_IO		= ext2_direct_IO,
 	.writepages		= ext2_writepages,
-	.migrate_folio		= buffer_migrate_folio,
+	.migratepage		= buffer_migrate_page,
 	.is_partially_uptodate	= block_is_partially_uptodate,
+	.error_remove_page	= generic_error_remove_page,
+};
+
+const struct address_space_operations ext2_nobh_aops = {
+	.readpage		= ext2_readpage,
+	.readpages		= ext2_readpages,
+	.writepage		= ext2_nobh_writepage,
+	.write_begin		= ext2_nobh_write_begin,
+	.write_end		= nobh_write_end,
+	.bmap			= ext2_bmap,
+	.direct_IO		= ext2_direct_IO,
+	.writepages		= ext2_writepages,
+	.migratepage		= buffer_migrate_page,
 	.error_remove_page	= generic_error_remove_page,
 };
 
 static const struct address_space_operations ext2_dax_aops = {
 	.writepages		= ext2_dax_writepages,
 	.direct_IO		= noop_direct_IO,
-	.dirty_folio		= noop_dirty_folio,
+	.set_page_dirty		= noop_set_page_dirty,
+	.invalidatepage		= noop_invalidatepage,
 };
 
 /*
@@ -1140,7 +1179,7 @@ static void ext2_free_branches(struct inode *inode, __le32 *p, __le32 *q, int de
 		ext2_free_data(inode, p, q);
 }
 
-/* mapping->invalidate_lock must be held when calling this function */
+/* dax_sem must be held when calling this function */
 static void __ext2_truncate_blocks(struct inode *inode, loff_t offset)
 {
 	__le32 *i_data = EXT2_I(inode)->i_data;
@@ -1157,7 +1196,7 @@ static void __ext2_truncate_blocks(struct inode *inode, loff_t offset)
 	iblock = (offset + blocksize-1) >> EXT2_BLOCK_SIZE_BITS(inode->i_sb);
 
 #ifdef CONFIG_FS_DAX
-	WARN_ON(!rwsem_is_locked(&inode->i_mapping->invalidate_lock));
+	WARN_ON(!rwsem_is_locked(&ei->dax_sem));
 #endif
 
 	n = ext2_block_to_path(inode, iblock, offsets, NULL);
@@ -1205,7 +1244,7 @@ do_indirects:
 				mark_inode_dirty(inode);
 				ext2_free_branches(inode, &nr, &nr+1, 1);
 			}
-			fallthrough;
+			/* fall through */
 		case EXT2_IND_BLOCK:
 			nr = i_data[EXT2_DIND_BLOCK];
 			if (nr) {
@@ -1213,7 +1252,7 @@ do_indirects:
 				mark_inode_dirty(inode);
 				ext2_free_branches(inode, &nr, &nr+1, 2);
 			}
-			fallthrough;
+			/* fall through */
 		case EXT2_DIND_BLOCK:
 			nr = i_data[EXT2_TIND_BLOCK];
 			if (nr) {
@@ -1221,7 +1260,6 @@ do_indirects:
 				mark_inode_dirty(inode);
 				ext2_free_branches(inode, &nr, &nr+1, 3);
 			}
-			break;
 		case EXT2_TIND_BLOCK:
 			;
 	}
@@ -1239,9 +1277,9 @@ static void ext2_truncate_blocks(struct inode *inode, loff_t offset)
 	if (ext2_inode_is_fast_symlink(inode))
 		return;
 
-	filemap_invalidate_lock(inode->i_mapping);
+	dax_sem_down_write(EXT2_I(inode));
 	__ext2_truncate_blocks(inode, offset);
-	filemap_invalidate_unlock(inode->i_mapping);
+	dax_sem_up_write(EXT2_I(inode));
 }
 
 static int ext2_setsize(struct inode *inode, loff_t newsize)
@@ -1258,20 +1296,23 @@ static int ext2_setsize(struct inode *inode, loff_t newsize)
 
 	inode_dio_wait(inode);
 
-	if (IS_DAX(inode))
-		error = dax_zero_range(inode, newsize,
-				       PAGE_ALIGN(newsize) - newsize, NULL,
-				       &ext2_iomap_ops);
+	if (IS_DAX(inode)) {
+		error = iomap_zero_range(inode, newsize,
+					 PAGE_ALIGN(newsize) - newsize, NULL,
+					 &ext2_iomap_ops);
+	} else if (test_opt(inode->i_sb, NOBH))
+		error = nobh_truncate_page(inode->i_mapping,
+				newsize, ext2_get_block);
 	else
 		error = block_truncate_page(inode->i_mapping,
 				newsize, ext2_get_block);
 	if (error)
 		return error;
 
-	filemap_invalidate_lock(inode->i_mapping);
+	dax_sem_down_write(EXT2_I(inode));
 	truncate_setsize(inode, newsize);
 	__ext2_truncate_blocks(inode, newsize);
-	filemap_invalidate_unlock(inode->i_mapping);
+	dax_sem_up_write(EXT2_I(inode));
 
 	inode->i_mtime = inode->i_ctime = current_time(inode);
 	if (inode_needs_sync(inode)) {
@@ -1353,6 +1394,8 @@ void ext2_set_file_ops(struct inode *inode)
 	inode->i_fop = &ext2_file_operations;
 	if (IS_DAX(inode))
 		inode->i_mapping->a_ops = &ext2_dax_aops;
+	else if (test_opt(inode->i_sb, NOBH))
+		inode->i_mapping->a_ops = &ext2_nobh_aops;
 	else
 		inode->i_mapping->a_ops = &ext2_aops;
 }
@@ -1452,7 +1495,10 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 	} else if (S_ISDIR(inode->i_mode)) {
 		inode->i_op = &ext2_dir_inode_operations;
 		inode->i_fop = &ext2_dir_operations;
-		inode->i_mapping->a_ops = &ext2_aops;
+		if (test_opt(inode->i_sb, NOBH))
+			inode->i_mapping->a_ops = &ext2_nobh_aops;
+		else
+			inode->i_mapping->a_ops = &ext2_aops;
 	} else if (S_ISLNK(inode->i_mode)) {
 		if (ext2_inode_is_fast_symlink(inode)) {
 			inode->i_link = (char *)ei->i_data;
@@ -1462,7 +1508,10 @@ struct inode *ext2_iget (struct super_block *sb, unsigned long ino)
 		} else {
 			inode->i_op = &ext2_symlink_inode_operations;
 			inode_nohighmem(inode);
-			inode->i_mapping->a_ops = &ext2_aops;
+			if (test_opt(inode->i_sb, NOBH))
+				inode->i_mapping->a_ops = &ext2_nobh_aops;
+			else
+				inode->i_mapping->a_ops = &ext2_aops;
 		}
 	} else {
 		inode->i_op = &ext2_special_inode_operations;
@@ -1498,7 +1547,7 @@ static int __ext2_write_inode(struct inode *inode, int do_sync)
 	if (IS_ERR(raw_inode))
  		return -EIO;
 
-	/* For fields not tracking in the in-memory inode,
+	/* For fields not not tracking in the in-memory inode,
 	 * initialise them to zero for new inodes. */
 	if (ei->i_state & EXT2_STATE_NEW)
 		memset(raw_inode, 0, EXT2_SB(sb)->s_inode_size);
@@ -1592,8 +1641,8 @@ int ext2_write_inode(struct inode *inode, struct writeback_control *wbc)
 	return __ext2_write_inode(inode, wbc->sync_mode == WB_SYNC_ALL);
 }
 
-int ext2_getattr(struct mnt_idmap *idmap, const struct path *path,
-		 struct kstat *stat, u32 request_mask, unsigned int query_flags)
+int ext2_getattr(const struct path *path, struct kstat *stat,
+		u32 request_mask, unsigned int query_flags)
 {
 	struct inode *inode = d_inode(path->dentry);
 	struct ext2_inode_info *ei = EXT2_I(inode);
@@ -1614,28 +1663,27 @@ int ext2_getattr(struct mnt_idmap *idmap, const struct path *path,
 			STATX_ATTR_IMMUTABLE |
 			STATX_ATTR_NODUMP);
 
-	generic_fillattr(&nop_mnt_idmap, inode, stat);
+	generic_fillattr(inode, stat);
 	return 0;
 }
 
-int ext2_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
-		 struct iattr *iattr)
+int ext2_setattr(struct dentry *dentry, struct iattr *iattr)
 {
 	struct inode *inode = d_inode(dentry);
 	int error;
 
-	error = setattr_prepare(&nop_mnt_idmap, dentry, iattr);
+	error = setattr_prepare(dentry, iattr);
 	if (error)
 		return error;
 
-	if (is_quota_modification(&nop_mnt_idmap, inode, iattr)) {
+	if (is_quota_modification(inode, iattr)) {
 		error = dquot_initialize(inode);
 		if (error)
 			return error;
 	}
-	if (i_uid_needs_update(&nop_mnt_idmap, iattr, inode) ||
-	    i_gid_needs_update(&nop_mnt_idmap, iattr, inode)) {
-		error = dquot_transfer(&nop_mnt_idmap, inode, iattr);
+	if ((iattr->ia_valid & ATTR_UID && !uid_eq(iattr->ia_uid, inode->i_uid)) ||
+	    (iattr->ia_valid & ATTR_GID && !gid_eq(iattr->ia_gid, inode->i_gid))) {
+		error = dquot_transfer(inode, iattr);
 		if (error)
 			return error;
 	}
@@ -1644,9 +1692,9 @@ int ext2_setattr(struct mnt_idmap *idmap, struct dentry *dentry,
 		if (error)
 			return error;
 	}
-	setattr_copy(&nop_mnt_idmap, inode, iattr);
+	setattr_copy(inode, iattr);
 	if (iattr->ia_valid & ATTR_MODE)
-		error = posix_acl_chmod(&nop_mnt_idmap, dentry, inode->i_mode);
+		error = posix_acl_chmod(inode, inode->i_mode);
 	mark_inode_dirty(inode);
 
 	return error;

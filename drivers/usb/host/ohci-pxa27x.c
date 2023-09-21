@@ -29,13 +29,15 @@
 #include <linux/of_platform.h>
 #include <linux/of_gpio.h>
 #include <linux/platform_data/usb-ohci-pxa27x.h>
+#include <linux/platform_data/usb-pxa3xx-ulpi.h>
 #include <linux/platform_device.h>
 #include <linux/regulator/consumer.h>
 #include <linux/signal.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
 #include <linux/usb/otg.h>
-#include <linux/soc/pxa/cpu.h>
+
+#include <mach/hardware.h>
 
 #include "ohci.h"
 
@@ -112,6 +114,8 @@
 #define UHCHIT          (0x006C) /* UHC Interrupt Test register */
 
 #define PXA_UHC_MAX_PORTNUM    3
+
+static const char hcd_name[] = "ohci-pxa27x";
 
 static struct hc_driver __read_mostly ohci_pxa27x_hc_driver;
 
@@ -274,6 +278,7 @@ static int pxa27x_start_hc(struct pxa27x_ohci *pxa_ohci, struct device *dev)
 	int retval;
 	struct pxaohci_platform_data *inf;
 	uint32_t uhchr;
+	struct usb_hcd *hcd = dev_get_drvdata(dev);
 
 	inf = dev_get_platdata(dev);
 
@@ -299,6 +304,9 @@ static int pxa27x_start_hc(struct pxa27x_ohci *pxa_ohci, struct device *dev)
 		return retval;
 	}
 
+	if (cpu_is_pxa3xx())
+		pxa3xx_u2d_start_hc(&hcd->self);
+
 	uhchr = __raw_readl(pxa_ohci->mmio_base + UHCHR) & ~UHCHR_SSE;
 	__raw_writel(uhchr, pxa_ohci->mmio_base + UHCHR);
 	__raw_writel(UHCHIE_UPRIE | UHCHIE_RWIE, pxa_ohci->mmio_base + UHCHIE);
@@ -311,9 +319,13 @@ static int pxa27x_start_hc(struct pxa27x_ohci *pxa_ohci, struct device *dev)
 static void pxa27x_stop_hc(struct pxa27x_ohci *pxa_ohci, struct device *dev)
 {
 	struct pxaohci_platform_data *inf;
+	struct usb_hcd *hcd = dev_get_drvdata(dev);
 	uint32_t uhccoms;
 
 	inf = dev_get_platdata(dev);
+
+	if (cpu_is_pxa3xx())
+		pxa3xx_u2d_stop_hc(&hcd->self);
 
 	if (inf->exit)
 		inf->exit(dev);
@@ -398,13 +410,12 @@ static int ohci_pxa_of_init(struct platform_device *pdev)
 
 /**
  * ohci_hcd_pxa27x_probe - initialize pxa27x-based HCDs
- * @pdev:	USB Host controller to probe
- *
- * Context: task context, might sleep
+ * Context: !in_interrupt()
  *
  * Allocates basic resources for this USB host controller, and
  * then invokes the start() method for the HCD associated with it
  * through the hotplug entry's driver_data.
+ *
  */
 static int ohci_hcd_pxa27x_probe(struct platform_device *pdev)
 {
@@ -498,13 +509,13 @@ static int ohci_hcd_pxa27x_probe(struct platform_device *pdev)
 
 /**
  * ohci_hcd_pxa27x_remove - shutdown processing for pxa27x-based HCDs
- * @pdev: USB Host Controller being removed
- *
- * Context: task context, might sleep
+ * @dev: USB Host Controller being removed
+ * Context: !in_interrupt()
  *
  * Reverses the effect of ohci_hcd_pxa27x_probe(), first invoking
  * the HCD's stop() method.  It is always called from a thread
  * context, normally "rmmod", "apmd", or something similar.
+ *
  */
 static int ohci_hcd_pxa27x_remove(struct platform_device *pdev)
 {
@@ -596,6 +607,8 @@ static int __init ohci_pxa27x_init(void)
 {
 	if (usb_disabled())
 		return -ENODEV;
+
+	pr_info("%s: " DRIVER_DESC "\n", hcd_name);
 
 	ohci_init_driver(&ohci_pxa27x_hc_driver, &pxa27x_overrides);
 	ohci_pxa27x_hc_driver.hub_control = pxa27x_ohci_hub_control;

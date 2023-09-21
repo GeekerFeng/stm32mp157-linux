@@ -4,32 +4,8 @@
 #
 # set -e
 
-ALL_TESTS="
-	kci_test_polrouting
-	kci_test_route_get
-	kci_test_addrlft
-	kci_test_promote_secondaries
-	kci_test_tc
-	kci_test_gre
-	kci_test_gretap
-	kci_test_ip6gretap
-	kci_test_erspan
-	kci_test_ip6erspan
-	kci_test_bridge
-	kci_test_addrlabel
-	kci_test_ifalias
-	kci_test_vrf
-	kci_test_encap
-	kci_test_macsec
-	kci_test_ipsec
-	kci_test_ipsec_offload
-	kci_test_fdb_get
-	kci_test_neigh_get
-	kci_test_bridge_parent_id
-	kci_test_address_proto
-"
-
 devdummy="test-dummy0"
+ret=0
 
 # Kselftest framework requirement - SKIP code is 4.
 ksft_skip=4
@@ -90,7 +66,7 @@ kci_test_bridge()
 	devbr="test-br0"
 	vlandev="testbr-vlan1"
 
-	local ret=0
+	ret=0
 	ip link add name "$devbr" type bridge
 	check_err $?
 
@@ -137,7 +113,7 @@ kci_test_gre()
 	rem=10.42.42.1
 	loc=10.0.0.1
 
-	local ret=0
+	ret=0
 	ip tunnel add $gredev mode gre remote $rem local $loc ttl 1
 	check_err $?
 	ip link set $gredev up
@@ -173,7 +149,7 @@ kci_test_gre()
 kci_test_tc()
 {
 	dev=lo
-	local ret=0
+	ret=0
 
 	tc qdisc add dev "$dev" root handle 1: htb
 	check_err $?
@@ -208,7 +184,7 @@ kci_test_tc()
 
 kci_test_polrouting()
 {
-	local ret=0
+	ret=0
 	ip rule add fwmark 1 lookup 100
 	check_err $?
 	ip route add local 0.0.0.0/0 dev lo table 100
@@ -231,7 +207,7 @@ kci_test_route_get()
 {
 	local hash_policy=$(sysctl -n net.ipv4.fib_multipath_hash_policy)
 
-	local ret=0
+	ret=0
 
 	ip route get 127.0.0.1 > /dev/null
 	check_err $?
@@ -241,9 +217,9 @@ kci_test_route_get()
 	check_err $?
 	ip route get fe80::1 dev "$devdummy" > /dev/null
 	check_err $?
-	ip route get 127.0.0.1 from 127.0.0.1 oif lo tos 0x10 mark 0x1 > /dev/null
+	ip route get 127.0.0.1 from 127.0.0.1 oif lo tos 0x1 mark 0x1 > /dev/null
 	check_err $?
-	ip route get ::1 from ::1 iif lo oif lo tos 0x10 mark 0x1 > /dev/null
+	ip route get ::1 from ::1 iif lo oif lo tos 0x1 mark 0x1 > /dev/null
 	check_err $?
 	ip addr add dev "$devdummy" 10.23.7.11/24
 	check_err $?
@@ -314,7 +290,7 @@ kci_test_promote_secondaries()
 
 kci_test_addrlabel()
 {
-	local ret=0
+	ret=0
 
 	ip addrlabel add prefix dead::/64 dev lo label 1
 	check_err $?
@@ -354,7 +330,7 @@ kci_test_addrlabel()
 
 kci_test_ifalias()
 {
-	local ret=0
+	ret=0
 	namewant=$(uuidgen)
 	syspathname="/sys/class/net/$devdummy/ifalias"
 
@@ -409,7 +385,7 @@ kci_test_ifalias()
 kci_test_vrf()
 {
 	vrfname="test-vrf"
-	local ret=0
+	ret=0
 
 	ip link show type vrf 2>/dev/null
 	if [ $? -ne 0 ]; then
@@ -449,7 +425,7 @@ kci_test_vrf()
 
 kci_test_encap_vxlan()
 {
-	local ret=0
+	ret=0
 	vxlan="test-vxlan0"
 	vlan="test-vlan0"
 	testns="$1"
@@ -535,7 +511,7 @@ kci_test_encap_vxlan()
 
 kci_test_encap_fou()
 {
-	local ret=0
+	ret=0
 	name="test-fou"
 	testns="$1"
 
@@ -545,11 +521,6 @@ kci_test_encap_fou()
 		return $ksft_skip
 	fi
 
-	if ! /sbin/modprobe -q -n fou; then
-		echo "SKIP: module fou is not found"
-		return $ksft_skip
-	fi
-	/sbin/modprobe -q fou
 	ip -netns "$testns" fou add port 7777 ipproto 47 2>/dev/null
 	if [ $? -ne 0 ];then
 		echo "FAIL: can't add fou port 7777, skipping test"
@@ -577,7 +548,7 @@ kci_test_encap_fou()
 kci_test_encap()
 {
 	testns="testns"
-	local ret=0
+	ret=0
 
 	ip netns add "$testns"
 	if [ $? -ne 0 ]; then
@@ -594,18 +565,15 @@ kci_test_encap()
 	check_err $?
 
 	kci_test_encap_vxlan "$testns"
-	check_err $?
 	kci_test_encap_fou "$testns"
-	check_err $?
 
 	ip netns del "$testns"
-	return $ret
 }
 
 kci_test_macsec()
 {
 	msname="test_macsec0"
-	local ret=0
+	ret=0
 
 	ip macsec help 2>&1 | grep -q "^Usage: ip macsec"
 	if [ $? -ne 0 ]; then
@@ -663,7 +631,7 @@ kci_test_macsec()
 #-------------------------------------------------------------------
 kci_test_ipsec()
 {
-	local ret=0
+	ret=0
 	algo="aead rfc4106(gcm(aes)) 0x3132333435363738393031323334353664636261 128"
 	srcip=192.168.123.1
 	dstip=192.168.123.2
@@ -763,7 +731,7 @@ kci_test_ipsec()
 #-------------------------------------------------------------------
 kci_test_ipsec_offload()
 {
-	local ret=0
+	ret=0
 	algo="aead rfc4106(gcm(aes)) 0x3132333435363738393031323334353664636261 128"
 	srcip=192.168.123.3
 	dstip=192.168.123.4
@@ -807,7 +775,7 @@ kci_test_ipsec_offload()
 	    tmpl proto esp src $srcip dst $dstip spi 9 \
 	    mode transport reqid 42
 	check_err $?
-	ip x p add dir in src $dstip/24 dst $srcip/24 \
+	ip x p add dir out src $dstip/24 dst $srcip/24 \
 	    tmpl proto esp src $dstip dst $srcip spi 9 \
 	    mode transport reqid 42
 	check_err $?
@@ -873,7 +841,7 @@ kci_test_gretap()
 {
 	testns="testns"
 	DEV_NS=gretap00
-	local ret=0
+	ret=0
 
 	ip netns add "$testns"
 	if [ $? -ne 0 ]; then
@@ -923,7 +891,7 @@ kci_test_ip6gretap()
 {
 	testns="testns"
 	DEV_NS=ip6gretap00
-	local ret=0
+	ret=0
 
 	ip netns add "$testns"
 	if [ $? -ne 0 ]; then
@@ -973,7 +941,7 @@ kci_test_erspan()
 {
 	testns="testns"
 	DEV_NS=erspan00
-	local ret=0
+	ret=0
 
 	ip link help erspan 2>&1 | grep -q "^Usage:"
 	if [ $? -ne 0 ];then
@@ -1038,7 +1006,7 @@ kci_test_ip6erspan()
 {
 	testns="testns"
 	DEV_NS=ip6erspan00
-	local ret=0
+	ret=0
 
 	ip link help ip6erspan 2>&1 | grep -q "^Usage:"
 	if [ $? -ne 0 ];then
@@ -1109,7 +1077,7 @@ kci_test_fdb_get()
 	test_mac=de:ad:be:ef:13:37
 	localip="10.0.2.2"
 	dstip="10.0.2.3"
-	local ret=0
+	ret=0
 
 	bridge fdb help 2>&1 |grep -q 'bridge fdb get'
 	if [ $? -ne 0 ];then
@@ -1157,7 +1125,7 @@ kci_test_neigh_get()
 	dstmac=de:ad:be:ef:13:37
 	dstip=10.0.2.4
 	dstip6=dead::2
-	local ret=0
+	ret=0
 
 	ip neigh help 2>&1 |grep -q 'ip neigh get'
 	if [ $? -ne 0 ];then
@@ -1205,173 +1173,36 @@ kci_test_neigh_get()
 	echo "PASS: neigh get"
 }
 
-kci_test_bridge_parent_id()
-{
-	local ret=0
-	sysfsnet=/sys/bus/netdevsim/devices/netdevsim
-	probed=false
-
-	if [ ! -w /sys/bus/netdevsim/new_device ] ; then
-		modprobe -q netdevsim
-		check_err $?
-		if [ $ret -ne 0 ]; then
-			echo "SKIP: bridge_parent_id can't load netdevsim"
-			return $ksft_skip
-		fi
-		probed=true
-	fi
-
-	echo "10 1" > /sys/bus/netdevsim/new_device
-	while [ ! -d ${sysfsnet}10 ] ; do :; done
-	echo "20 1" > /sys/bus/netdevsim/new_device
-	while [ ! -d ${sysfsnet}20 ] ; do :; done
-	udevadm settle
-	dev10=`ls ${sysfsnet}10/net/`
-	dev20=`ls ${sysfsnet}20/net/`
-
-	ip link add name test-bond0 type bond mode 802.3ad
-	ip link set dev $dev10 master test-bond0
-	ip link set dev $dev20 master test-bond0
-	ip link add name test-br0 type bridge
-	ip link set dev test-bond0 master test-br0
-	check_err $?
-
-	# clean up any leftovers
-	ip link del dev test-br0
-	ip link del dev test-bond0
-	echo 20 > /sys/bus/netdevsim/del_device
-	echo 10 > /sys/bus/netdevsim/del_device
-	$probed && rmmod netdevsim
-
-	if [ $ret -ne 0 ]; then
-		echo "FAIL: bridge_parent_id"
-		return 1
-	fi
-	echo "PASS: bridge_parent_id"
-}
-
-address_get_proto()
-{
-	local addr=$1; shift
-
-	ip -N -j address show dev "$devdummy" |
-	    jq -e -r --arg addr "${addr%/*}" \
-	       '.[].addr_info[] | select(.local == $addr) | .protocol'
-}
-
-address_count()
-{
-	ip -N -j address show dev "$devdummy" "$@" |
-	    jq -e -r '[.[].addr_info[] | .local | select(. != null)] | length'
-}
-
-do_test_address_proto()
-{
-	local what=$1; shift
-	local addr=$1; shift
-	local addr2=${addr%/*}2/${addr#*/}
-	local addr3=${addr%/*}3/${addr#*/}
-	local proto
-	local count
-	local ret=0
-	local err
-
-	ip address add dev "$devdummy" "$addr3"
-	check_err $?
-	proto=$(address_get_proto "$addr3")
-	[[ "$proto" == null ]]
-	check_err $?
-
-	ip address add dev "$devdummy" "$addr2" proto 0x99
-	check_err $?
-	proto=$(address_get_proto "$addr2")
-	[[ "$proto" == 0x99 ]]
-	check_err $?
-
-	ip address add dev "$devdummy" "$addr" proto 0xab
-	check_err $?
-	proto=$(address_get_proto "$addr")
-	[[ "$proto" == 0xab ]]
-	check_err $?
-
-	ip address replace dev "$devdummy" "$addr" proto 0x11
-	proto=$(address_get_proto "$addr")
-	check_err $?
-	[[ "$proto" == 0x11 ]]
-	check_err $?
-
-	count=$(address_count)
-	check_err $?
-	(( count >= 3 )) # $addr, $addr2 and $addr3 plus any kernel addresses
-	check_err $?
-
-	count=$(address_count proto 0)
-	check_err $?
-	(( count == 1 )) # just $addr3
-	check_err $?
-
-	count=$(address_count proto 0x11)
-	check_err $?
-	(( count == 2 )) # $addr and $addr3
-	check_err $?
-
-	count=$(address_count proto 0xab)
-	check_err $?
-	(( count == 1 )) # just $addr3
-	check_err $?
-
-	ip address del dev "$devdummy" "$addr"
-	ip address del dev "$devdummy" "$addr2"
-	ip address del dev "$devdummy" "$addr3"
-
-	if [ $ret -ne 0 ]; then
-		echo "FAIL: address proto $what"
-		return 1
-	fi
-	echo "PASS: address proto $what"
-}
-
-kci_test_address_proto()
-{
-	local ret=0
-
-	do_test_address_proto IPv4 192.0.2.1/28
-	check_err $?
-
-	do_test_address_proto IPv6 2001:db8:1::1/64
-	check_err $?
-
-	return $ret
-}
-
 kci_test_rtnl()
 {
-	local current_test
-	local ret=0
-
 	kci_add_dummy
 	if [ $ret -ne 0 ];then
 		echo "FAIL: cannot add dummy interface"
 		return 1
 	fi
 
-	for current_test in ${TESTS:-$ALL_TESTS}; do
-		$current_test
-		check_err $?
-	done
+	kci_test_polrouting
+	kci_test_route_get
+	kci_test_addrlft
+	kci_test_promote_secondaries
+	kci_test_tc
+	kci_test_gre
+	kci_test_gretap
+	kci_test_ip6gretap
+	kci_test_erspan
+	kci_test_ip6erspan
+	kci_test_bridge
+	kci_test_addrlabel
+	kci_test_ifalias
+	kci_test_vrf
+	kci_test_encap
+	kci_test_macsec
+	kci_test_ipsec
+	kci_test_ipsec_offload
+	kci_test_fdb_get
+	kci_test_neigh_get
 
 	kci_del_dummy
-	return $ret
-}
-
-usage()
-{
-	cat <<EOF
-usage: ${0##*/} OPTS
-
-        -t <test>   Test(s) to run (default: all)
-                    (options: $(echo $ALL_TESTS))
-EOF
 }
 
 #check for needed privileges
@@ -1388,14 +1219,6 @@ for x in ip tc;do
 	fi
 done
 
-while getopts t:h o; do
-	case $o in
-		t) TESTS=$OPTARG;;
-		h) usage; exit 0;;
-		*) usage; exit 1;;
-	esac
-done
-
 kci_test_rtnl
 
-exit $?
+exit $ret

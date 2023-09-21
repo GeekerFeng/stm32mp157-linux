@@ -10,6 +10,10 @@
  * my board.
  */
 
+#if defined(CONFIG_SERIAL_BCM63XX_CONSOLE) && defined(CONFIG_MAGIC_SYSRQ)
+#define SUPPORT_SYSRQ
+#endif
+
 #include <linux/kernel.h>
 #include <linux/platform_device.h>
 #include <linux/init.h>
@@ -294,7 +298,9 @@ static void bcm_uart_do_rx(struct uart_port *port)
 
 	} while (--max_count);
 
+	spin_unlock(&port->lock);
 	tty_flip_buffer_push(tty_port);
+	spin_lock(&port->lock);
 }
 
 /*
@@ -303,24 +309,53 @@ static void bcm_uart_do_rx(struct uart_port *port)
  */
 static void bcm_uart_do_tx(struct uart_port *port)
 {
-	unsigned int val;
-	bool pending;
-	u8 ch;
+	struct circ_buf *xmit;
+	unsigned int val, max_count;
+
+	if (port->x_char) {
+		bcm_uart_writel(port, port->x_char, UART_FIFO_REG);
+		port->icount.tx++;
+		port->x_char = 0;
+		return;
+	}
+
+	if (uart_tx_stopped(port)) {
+		bcm_uart_stop_tx(port);
+		return;
+	}
+
+	xmit = &port->state->xmit;
+	if (uart_circ_empty(xmit))
+		goto txq_empty;
 
 	val = bcm_uart_readl(port, UART_MCTL_REG);
 	val = (val & UART_MCTL_TXFIFOFILL_MASK) >> UART_MCTL_TXFIFOFILL_SHIFT;
+	max_count = port->fifosize - val;
 
-	pending = uart_port_tx_limited(port, ch, port->fifosize - val,
-		true,
-		bcm_uart_writel(port, ch, UART_FIFO_REG),
-		({}));
-	if (pending)
-		return;
+	while (max_count--) {
+		unsigned int c;
 
+		c = xmit->buf[xmit->tail];
+		bcm_uart_writel(port, c, UART_FIFO_REG);
+		xmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);
+		port->icount.tx++;
+		if (uart_circ_empty(xmit))
+			break;
+	}
+
+	if (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)
+		uart_write_wakeup(port);
+
+	if (uart_circ_empty(xmit))
+		goto txq_empty;
+	return;
+
+txq_empty:
 	/* nothing to send, disable transmit interrupt */
 	val = bcm_uart_readl(port, UART_IR_REG);
 	val &= ~UART_TX_INT_MASK;
 	bcm_uart_writel(port, val, UART_IR_REG);
+	return;
 }
 
 /*
@@ -463,8 +498,9 @@ static void bcm_uart_shutdown(struct uart_port *port)
 /*
  * serial core request to change current uart setting
  */
-static void bcm_uart_set_termios(struct uart_port *port, struct ktermios *new,
-				 const struct ktermios *old)
+static void bcm_uart_set_termios(struct uart_port *port,
+				 struct ktermios *new,
+				 struct ktermios *old)
 {
 	unsigned int ctl, baud, quot, ier;
 	unsigned long flags;
@@ -596,40 +632,6 @@ static int bcm_uart_verify_port(struct uart_port *port,
 	return 0;
 }
 
-#ifdef CONFIG_CONSOLE_POLL
-/*
- * return true when outstanding tx equals fifo size
- */
-static bool bcm_uart_tx_full(struct uart_port *port)
-{
-	unsigned int val;
-
-	val = bcm_uart_readl(port, UART_MCTL_REG);
-	val = (val & UART_MCTL_TXFIFOFILL_MASK) >> UART_MCTL_TXFIFOFILL_SHIFT;
-	return !(port->fifosize - val);
-}
-
-static int bcm_uart_poll_get_char(struct uart_port *port)
-{
-	unsigned int iestat;
-
-	iestat = bcm_uart_readl(port, UART_IR_REG);
-	if (!(iestat & UART_IR_STAT(UART_IR_RXNOTEMPTY)))
-		return NO_POLL_CHAR;
-
-	return bcm_uart_readl(port, UART_FIFO_REG);
-}
-
-static void bcm_uart_poll_put_char(struct uart_port *port, unsigned char c)
-{
-	while (bcm_uart_tx_full(port)) {
-		cpu_relax();
-	}
-
-	bcm_uart_writel(port, c, UART_FIFO_REG);
-}
-#endif
-
 /* serial core callbacks */
 static const struct uart_ops bcm_uart_ops = {
 	.tx_empty	= bcm_uart_tx_empty,
@@ -648,10 +650,6 @@ static const struct uart_ops bcm_uart_ops = {
 	.request_port	= bcm_uart_request_port,
 	.config_port	= bcm_uart_config_port,
 	.verify_port	= bcm_uart_verify_port,
-#ifdef CONFIG_CONSOLE_POLL
-	.poll_get_char  = bcm_uart_poll_get_char,
-	.poll_put_char  = bcm_uart_poll_put_char,
-#endif
 };
 
 
@@ -689,7 +687,7 @@ static void wait_for_xmitr(struct uart_port *port)
 /*
  * output given char
  */
-static void bcm_console_putchar(struct uart_port *port, unsigned char ch)
+static void bcm_console_putchar(struct uart_port *port, int ch)
 {
 	wait_for_xmitr(port);
 	bcm_uart_writel(port, ch, UART_FIFO_REG);
@@ -812,7 +810,7 @@ static struct uart_driver bcm_uart_driver = {
  */
 static int bcm_uart_probe(struct platform_device *pdev)
 {
-	struct resource *res_mem;
+	struct resource *res_mem, *res_irq;
 	struct uart_port *port;
 	struct clk *clk;
 	int ret;
@@ -841,10 +839,9 @@ static int bcm_uart_probe(struct platform_device *pdev)
 	if (IS_ERR(port->membase))
 		return PTR_ERR(port->membase);
 
-	ret = platform_get_irq(pdev, 0);
-	if (ret < 0)
-		return ret;
-	port->irq = ret;
+	res_irq = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
+	if (!res_irq)
+		return -ENODEV;
 
 	clk = clk_get(&pdev->dev, "refclk");
 	if (IS_ERR(clk) && pdev->dev.of_node)
@@ -854,13 +851,13 @@ static int bcm_uart_probe(struct platform_device *pdev)
 		return -ENODEV;
 
 	port->iotype = UPIO_MEM;
+	port->irq = res_irq->start;
 	port->ops = &bcm_uart_ops;
 	port->flags = UPF_BOOT_AUTOCONF;
 	port->dev = &pdev->dev;
 	port->fifosize = 16;
 	port->uartclk = clk_get_rate(clk) / 2;
 	port->line = pdev->id;
-	port->has_sysrq = IS_ENABLED(CONFIG_SERIAL_BCM63XX_CONSOLE);
 	clk_put(clk);
 
 	ret = uart_add_one_port(&bcm_uart_driver, port);

@@ -66,13 +66,17 @@ struct update_classid_context {
 
 #define UPDATE_CLASSID_BATCH 1000
 
-static int update_classid_sock(const void *v, struct file *file, unsigned int n)
+static int update_classid_sock(const void *v, struct file *file, unsigned n)
 {
+	int err;
 	struct update_classid_context *ctx = (void *)v;
-	struct socket *sock = sock_from_file(file);
+	struct socket *sock = sock_from_file(file, &err);
 
-	if (sock)
+	if (sock) {
+		spin_lock(&cgroup_sk_update_lock);
 		sock_cgroup_set_classid(&sock->sk->sk_cgrp_data, ctx->classid);
+		spin_unlock(&cgroup_sk_update_lock);
+	}
 	if (--ctx->batch == 0) {
 		ctx->batch = UPDATE_CLASSID_BATCH;
 		return n + 1;
@@ -118,11 +122,15 @@ static int write_classid(struct cgroup_subsys_state *css, struct cftype *cft,
 	struct css_task_iter it;
 	struct task_struct *p;
 
+	cgroup_sk_alloc_disable();
+
 	cs->classid = (u32)value;
 
 	css_task_iter_start(css, 0, &it);
-	while ((p = css_task_iter_next(&it)))
+	while ((p = css_task_iter_next(&it))) {
 		update_classid_task(p, cs->classid);
+		cond_resched();
+	}
 	css_task_iter_end(&it);
 
 	return 0;

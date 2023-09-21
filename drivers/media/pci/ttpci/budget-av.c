@@ -31,7 +31,6 @@
 #include "dvb-pll.h"
 #include <media/drv-intf/saa7146_vv.h>
 #include <linux/module.h>
-#include <linux/etherdevice.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
 #include <linux/interrupt.h>
@@ -1227,7 +1226,7 @@ static void frontend_init(struct budget_av *budget_av)
 		 * but so far it has been only confirmed for this type
 		 */
 		budget_av->reinitialise_demod = 1;
-		fallthrough;
+		/* fall through */
 	case SUBID_DVBS_KNC1_PLUS:
 	case SUBID_DVBS_EASYWATCH_1:
 		if (saa->pci->subsystem_vendor == 0x1894) {
@@ -1411,7 +1410,7 @@ static int vidioc_enum_input(struct file *file, void *fh, struct v4l2_input *i)
 
 static int vidioc_g_input(struct file *file, void *fh, unsigned int *i)
 {
-	struct saa7146_dev *dev = video_drvdata(file);
+	struct saa7146_dev *dev = ((struct saa7146_fh *)fh)->dev;
 	struct budget_av *budget_av = (struct budget_av *)dev->ext_priv;
 
 	*i = budget_av->cur_input;
@@ -1422,7 +1421,7 @@ static int vidioc_g_input(struct file *file, void *fh, unsigned int *i)
 
 static int vidioc_s_input(struct file *file, void *fh, unsigned int input)
 {
-	struct saa7146_dev *dev = video_drvdata(file);
+	struct saa7146_dev *dev = ((struct saa7146_fh *)fh)->dev;
 	struct budget_av *budget_av = (struct budget_av *)dev->ext_priv;
 
 	dprintk(1, "VIDIOC_S_INPUT %d\n", input);
@@ -1471,7 +1470,7 @@ static int budget_av_attach(struct saa7146_dev *dev, struct saa7146_pci_extensio
 		vv_data.vid_ops.vidioc_g_input = vidioc_g_input;
 		vv_data.vid_ops.vidioc_s_input = vidioc_s_input;
 
-		if ((err = saa7146_register_device(&budget_av->vd, dev, "knc1", VFL_TYPE_VIDEO))) {
+		if ((err = saa7146_register_device(&budget_av->vd, dev, "knc1", VFL_TYPE_GRABBER))) {
 			/* fixme: proper cleanup here */
 			ERR("cannot register capture v4l2 device\n");
 			saa7146_vv_release(dev);

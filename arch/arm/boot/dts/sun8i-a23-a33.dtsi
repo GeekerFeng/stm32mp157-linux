@@ -44,7 +44,6 @@
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 
-#include <dt-bindings/clock/sun6i-rtc.h>
 #include <dt-bindings/clock/sun8i-a23-a33-ccu.h>
 #include <dt-bindings/reset/sun8i-a23-a33-ccu.h>
 
@@ -183,19 +182,14 @@
 			/* compatible gets set in SoC specific dtsi file */
 			reg = <0x01c0c000 0x1000>;
 			interrupts = <GIC_SPI 86 IRQ_TYPE_LEVEL_HIGH>;
-			dmas = <&dma 12>;
 			clocks = <&ccu CLK_BUS_LCD>,
-				 <&ccu CLK_LCD_CH0>,
-				 <&ccu 13>;
+				 <&ccu CLK_LCD_CH0>;
 			clock-names = "ahb",
-				      "tcon-ch0",
-				      "lvds-alt";
+				      "tcon-ch0";
 			clock-output-names = "tcon-pixel-clock";
 			#clock-cells = <0>;
-			resets = <&ccu RST_BUS_LCD>,
-				 <&ccu RST_BUS_LVDS>;
-			reset-names = "lcd",
-				      "lvds";
+			resets = <&ccu RST_BUS_LCD>;
+			reset-names = "lcd";
 			status = "disabled";
 
 			ports {
@@ -330,7 +324,7 @@
 
 		ccu: clock@1c20000 {
 			reg = <0x01c20000 0x400>;
-			clocks = <&osc24M>, <&rtc CLK_OSC32K>;
+			clocks = <&osc24M>, <&rtc 0>;
 			clock-names = "hosc", "losc";
 			#clock-cells = <1>;
 			#reset-cells = <1>;
@@ -339,10 +333,8 @@
 		pio: pinctrl@1c20800 {
 			/* compatible gets set in SoC specific dtsi file */
 			reg = <0x01c20800 0x400>;
-			interrupt-parent = <&r_intc>;
 			/* interrupts get set in SoC specific dtsi file */
-			clocks = <&ccu CLK_BUS_PIO>, <&osc24M>,
-				 <&rtc CLK_OSC32K>;
+			clocks = <&ccu CLK_BUS_PIO>, <&osc24M>, <&rtc 0>;
 			clock-names = "apb", "hosc", "losc";
 			gpio-controller;
 			interrupt-controller;
@@ -476,7 +468,6 @@
 		lradc: lradc@1c22800 {
 			compatible = "allwinner,sun4i-a10-lradc-keys";
 			reg = <0x01c22800 0x100>;
-			interrupt-parent = <&r_intc>;
 			interrupts = <GIC_SPI 30 IRQ_TYPE_LEVEL_HIGH>;
 			status = "disabled";
 		};
@@ -490,7 +481,7 @@
 			clocks = <&ccu CLK_BUS_UART0>;
 			resets = <&ccu RST_BUS_UART0>;
 			dmas = <&dma 6>, <&dma 6>;
-			dma-names = "tx", "rx";
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
 
@@ -503,7 +494,7 @@
 			clocks = <&ccu CLK_BUS_UART1>;
 			resets = <&ccu RST_BUS_UART1>;
 			dmas = <&dma 7>, <&dma 7>;
-			dma-names = "tx", "rx";
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
 
@@ -516,7 +507,7 @@
 			clocks = <&ccu CLK_BUS_UART2>;
 			resets = <&ccu RST_BUS_UART2>;
 			dmas = <&dma 8>, <&dma 8>;
-			dma-names = "tx", "rx";
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
 
@@ -529,7 +520,7 @@
 			clocks = <&ccu CLK_BUS_UART3>;
 			resets = <&ccu RST_BUS_UART3>;
 			dmas = <&dma 9>, <&dma 9>;
-			dma-names = "tx", "rx";
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
 
@@ -542,7 +533,7 @@
 			clocks = <&ccu CLK_BUS_UART4>;
 			resets = <&ccu RST_BUS_UART4>;
 			dmas = <&dma 10>, <&dma 10>;
-			dma-names = "tx", "rx";
+			dma-names = "rx", "tx";
 			status = "disabled";
 		};
 
@@ -688,6 +679,9 @@
 			clock-names = "ahb", "mod", "ram";
 			resets = <&ccu RST_BUS_DRC>;
 
+			assigned-clocks = <&ccu CLK_DRC>;
+			assigned-clock-rates = <300000000>;
+
 			ports {
 				#address-cells = <1>;
 				#size-cells = <0>;
@@ -713,7 +707,6 @@
 		rtc: rtc@1f00000 {
 			compatible = "allwinner,sun8i-a23-rtc";
 			reg = <0x01f00000 0x400>;
-			interrupt-parent = <&r_intc>;
 			interrupts = <GIC_SPI 40 IRQ_TYPE_LEVEL_HIGH>,
 				     <GIC_SPI 41 IRQ_TYPE_LEVEL_HIGH>;
 			clock-output-names = "osc32k", "osc32k-out";
@@ -721,10 +714,10 @@
 			#clock-cells = <1>;
 		};
 
-		r_intc: interrupt-controller@1f00c00 {
+		nmi_intc: interrupt-controller@1f00c00 {
 			compatible = "allwinner,sun6i-a31-r-intc";
 			interrupt-controller;
-			#interrupt-cells = <3>;
+			#interrupt-cells = <2>;
 			reg = <0x01f00c00 0x400>;
 			interrupts = <GIC_SPI 32 IRQ_TYPE_LEVEL_HIGH>;
 		};
@@ -810,10 +803,10 @@
 		r_pio: pinctrl@1f02c00 {
 			compatible = "allwinner,sun8i-a23-r-pinctrl";
 			reg = <0x01f02c00 0x400>;
-			interrupt-parent = <&r_intc>;
 			interrupts = <GIC_SPI 45 IRQ_TYPE_LEVEL_HIGH>;
-			clocks = <&apb0_gates 0>, <&osc24M>, <&rtc CLK_OSC32K>;
+			clocks = <&apb0_gates 0>, <&osc24M>, <&rtc 0>;
 			clock-names = "apb", "hosc", "losc";
+			resets = <&apb0_rst 0>;
 			gpio-controller;
 			interrupt-controller;
 			#interrupt-cells = <3>;

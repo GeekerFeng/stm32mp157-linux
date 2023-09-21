@@ -95,8 +95,6 @@ enum
 	ICMP_MIB_OUTADDRMASKS,			/* OutAddrMasks */
 	ICMP_MIB_OUTADDRMASKREPS,		/* OutAddrMaskReps */
 	ICMP_MIB_CSUMERRORS,			/* InCsumErrors */
-	ICMP_MIB_RATELIMITGLOBAL,		/* OutRateLimitGlobal */
-	ICMP_MIB_RATELIMITHOST,			/* OutRateLimitHost */
 	__ICMP_MIB_MAX
 };
 
@@ -114,7 +112,6 @@ enum
 	ICMP6_MIB_OUTMSGS,			/* OutMsgs */
 	ICMP6_MIB_OUTERRORS,			/* OutErrors */
 	ICMP6_MIB_CSUMERRORS,			/* InCsumErrors */
-	ICMP6_MIB_RATELIMITHOST,		/* OutRateLimitHost */
 	__ICMP6_MIB_MAX
 };
 
@@ -162,7 +159,6 @@ enum
 	UDP_MIB_SNDBUFERRORS,			/* SndbufErrors */
 	UDP_MIB_CSUMERRORS,			/* InCsumErrors */
 	UDP_MIB_IGNOREDMULTI,			/* IgnoredMulti */
-	UDP_MIB_MEMERRORS,			/* MemErrors */
 	__UDP_MIB_MAX
 };
 
@@ -289,13 +285,6 @@ enum
 	LINUX_MIB_TCPRCVQDROP,			/* TCPRcvQDrop */
 	LINUX_MIB_TCPWQUEUETOOBIG,		/* TCPWqueueTooBig */
 	LINUX_MIB_TCPFASTOPENPASSIVEALTKEY,	/* TCPFastOpenPassiveAltKey */
-	LINUX_MIB_TCPTIMEOUTREHASH,		/* TCPTimeoutRehash */
-	LINUX_MIB_TCPDUPLICATEDATAREHASH,	/* TCPDuplicateDataRehash */
-	LINUX_MIB_TCPDSACKRECVSEGS,		/* TCPDSACKRecvSegs */
-	LINUX_MIB_TCPDSACKIGNOREDDUBIOUS,	/* TCPDSACKIgnoredDubious */
-	LINUX_MIB_TCPMIGRATEREQSUCCESS,		/* TCPMigrateReqSuccess */
-	LINUX_MIB_TCPMIGRATEREQFAILURE,		/* TCPMigrateReqFailure */
-	LINUX_MIB_TCPPLBREHASH,			/* TCPPLBRehash */
 	__LINUX_MIB_MAX
 };
 
@@ -332,25 +321,6 @@ enum
 	LINUX_MIB_XFRMOUTSTATEINVALID,		/* XfrmOutStateInvalid */
 	LINUX_MIB_XFRMACQUIREERROR,		/* XfrmAcquireError */
 	__LINUX_MIB_XFRMMAX
-};
-
-/* linux TLS mib definitions */
-enum
-{
-	LINUX_MIB_TLSNUM = 0,
-	LINUX_MIB_TLSCURRTXSW,			/* TlsCurrTxSw */
-	LINUX_MIB_TLSCURRRXSW,			/* TlsCurrRxSw */
-	LINUX_MIB_TLSCURRTXDEVICE,		/* TlsCurrTxDevice */
-	LINUX_MIB_TLSCURRRXDEVICE,		/* TlsCurrRxDevice */
-	LINUX_MIB_TLSTXSW,			/* TlsTxSw */
-	LINUX_MIB_TLSRXSW,			/* TlsRxSw */
-	LINUX_MIB_TLSTXDEVICE,			/* TlsTxDevice */
-	LINUX_MIB_TLSRXDEVICE,			/* TlsRxDevice */
-	LINUX_MIB_TLSDECRYPTERROR,		/* TlsDecryptError */
-	LINUX_MIB_TLSRXDEVICERESYNC,		/* TlsRxDeviceResync */
-	LINUX_MIB_TLSDECRYPTRETRY,		/* TlsDecryptRetry */
-	LINUX_MIB_TLSRXNOPADVIOL,		/* TlsRxNoPadViolation */
-	__LINUX_MIB_TLSMAX
 };
 
 #endif	/* _LINUX_SNMP_H */

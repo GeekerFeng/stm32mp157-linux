@@ -39,7 +39,8 @@ static bool __read_mostly sched_itmt_capable;
 unsigned int __read_mostly sysctl_sched_itmt_enabled;
 
 static int sched_itmt_update_handler(struct ctl_table *table, int write,
-				     void *buffer, size_t *lenp, loff_t *ppos)
+				     void __user *buffer, size_t *lenp,
+				     loff_t *ppos)
 {
 	unsigned int old_sysctl;
 	int ret;
@@ -77,6 +78,15 @@ static struct ctl_table itmt_kern_table[] = {
 	{}
 };
 
+static struct ctl_table itmt_root_table[] = {
+	{
+		.procname	= "kernel",
+		.mode		= 0555,
+		.child		= itmt_kern_table,
+	},
+	{}
+};
+
 static struct ctl_table_header *itmt_sysctl_header;
 
 /**
@@ -105,7 +115,7 @@ int sched_set_itmt_support(void)
 		return 0;
 	}
 
-	itmt_sysctl_header = register_sysctl("kernel", itmt_kern_table);
+	itmt_sysctl_header = register_sysctl_table(itmt_root_table);
 	if (!itmt_sysctl_header) {
 		mutex_unlock(&itmt_update_mutex);
 		return -ENOMEM;
@@ -189,7 +199,7 @@ void sched_set_itmt_core_prio(int prio, int core_cpu)
 		 * of the priority chain and only used when
 		 * all other high priority cpus are out of capacity.
 		 */
-		smt_prio = prio * smp_num_siblings / (i * i);
+		smt_prio = prio * smp_num_siblings / i;
 		per_cpu(sched_core_priority, cpu) = smt_prio;
 		i++;
 	}

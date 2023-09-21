@@ -3,10 +3,6 @@
 #define _INET_COMMON_H
 
 #include <linux/indirect_call_wrapper.h>
-#include <linux/net.h>
-#include <linux/netdev_features.h>
-#include <linux/types.h>
-#include <net/sock.h>
 
 extern const struct proto_ops inet_stream_ops;
 extern const struct proto_ops inet_dgram_ops;
@@ -16,8 +12,6 @@ extern const struct proto_ops inet_dgram_ops;
  */
 
 struct msghdr;
-struct net;
-struct page;
 struct sock;
 struct sockaddr;
 struct socket;
@@ -41,16 +35,8 @@ int inet_shutdown(struct socket *sock, int how);
 int inet_listen(struct socket *sock, int backlog);
 void inet_sock_destruct(struct sock *sk);
 int inet_bind(struct socket *sock, struct sockaddr *uaddr, int addr_len);
-/* Don't allocate port at this moment, defer to connect. */
-#define BIND_FORCE_ADDRESS_NO_PORT	(1 << 0)
-/* Grab and release socket lock. */
-#define BIND_WITH_LOCK			(1 << 1)
-/* Called from BPF program. */
-#define BIND_FROM_BPF			(1 << 2)
-/* Skip CAP_NET_BIND_SERVICE check. */
-#define BIND_NO_CAP_NET_BIND_SERVICE	(1 << 3)
 int __inet_bind(struct sock *sk, struct sockaddr *uaddr, int addr_len,
-		u32 flags);
+		bool force_bind_address_no_port, bool with_lock);
 int inet_getname(struct socket *sock, struct sockaddr *uaddr,
 		 int peer);
 int inet_ioctl(struct socket *sock, unsigned int cmd, unsigned long arg);

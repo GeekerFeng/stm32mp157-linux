@@ -24,8 +24,8 @@
 		reg = <0x00000000 0x08000000>;
 	};
 
-	nand_controller: nand-controller@18028000 {
-		nand@0 {
+	nand: nand@18028000 {
+		nandcs@0 {
 			partitions {
 				compatible = "fixed-partitions";
 				#address-cells = <1>;
@@ -42,7 +42,7 @@
 	leds {
 		compatible = "gpio-leds";
 
-		led-status {
+		status {
 			label = "bcm53xx:green:status";
 			gpios = <&chipcommon 0 GPIO_ACTIVE_HIGH>;
 			linux,default-trigger = "timer";
@@ -52,7 +52,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		button-restart {
+		restart {
 			label = "Reset";
 			linux,code = <KEY_RESTART>;
 			gpios = <&chipcommon 7 GPIO_ACTIVE_LOW>;
@@ -64,19 +64,6 @@
 	status = "okay";
 };
 
-&srab {
+&usb3_phy {
 	status = "okay";
-
-	ports {
-		port@4 {
-			reg = <4>;
-			label = "lan";
-		};
-
-		port@5 {
-			reg = <5>;
-			label = "cpu";
-			ethernet = <&gmac0>;
-		};
-	};
 };

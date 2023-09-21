@@ -5,7 +5,6 @@
 
 .. _process_index:
 
-=============================================
 Working with the kernel development community
 =============================================
 
@@ -26,38 +25,27 @@ Below are the essential guides that every developer should read.
    code-of-conduct-interpretation
    development-process
    submitting-patches
-   handling-regressions
    programming-language
    coding-style
-   maintainer-handbooks
    maintainer-pgp-guide
    email-clients
    kernel-enforcement-statement
    kernel-driver-statement
 
-For security issues, see:
-
-.. toctree::
-   :maxdepth: 1
-
-   security-bugs
-   embargoed-hardware-issues
-
-Other guides to the community that are of interest to most developers are:
+Other guides to the community that are of interest to most developers are: 
 
 .. toctree::
    :maxdepth: 1
 
    changes
+   submitting-drivers
    stable-api-nonsense
    management-style
    stable-kernel-rules
    submit-checklist
    kernel-docs
    deprecated
-   maintainers
-   researcher-guidelines
-   contribution-maturity-model
+   embargoed-hardware-issues
 
 These are some overall technical guides that have been put here for now for
 lack of a better place.
@@ -69,10 +57,7 @@ lack of a better place.
    adding-syscalls
    magic-number
    volatile-considered-harmful
-   botching-up-ioctls
    clang-format
-   ../riscv/patch-acceptance
-   ../core-api/unaligned-memory-access
 
 .. only::  subproject and html
 

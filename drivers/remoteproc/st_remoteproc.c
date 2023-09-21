@@ -129,7 +129,6 @@ static int st_rproc_parse_fw(struct rproc *rproc, const struct firmware *fw)
 	while (of_phandle_iterator_next(&it) == 0) {
 		rmem = of_reserved_mem_lookup(it.node);
 		if (!rmem) {
-			of_node_put(it.node);
 			dev_err(dev, "unable to acquire memory-region\n");
 			return -EINVAL;
 		}
@@ -151,10 +150,8 @@ static int st_rproc_parse_fw(struct rproc *rproc, const struct firmware *fw)
 							   it.node->name);
 		}
 
-		if (!mem) {
-			of_node_put(it.node);
+		if (!mem)
 			return -ENOMEM;
-		}
 
 		rproc_add_carveout(rproc, mem);
 		index++;
@@ -193,7 +190,7 @@ static int st_rproc_start(struct rproc *rproc)
 		}
 	}
 
-	dev_info(&rproc->dev, "Started from 0x%llx\n", rproc->bootaddr);
+	dev_info(&rproc->dev, "Started from 0x%x\n", rproc->bootaddr);
 
 	return 0;
 
@@ -382,7 +379,7 @@ static int st_rproc_probe(struct platform_device *pdev)
 		clk_set_rate(ddata->clk, ddata->clk_rate);
 	}
 
-	if (of_property_present(np, "mbox-names")) {
+	if (of_get_property(np, "mbox-names", NULL)) {
 		ddata->mbox_client_vq0.dev		= dev;
 		ddata->mbox_client_vq0.tx_done		= NULL;
 		ddata->mbox_client_vq0.tx_block	= false;

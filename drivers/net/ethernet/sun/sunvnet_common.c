@@ -1085,13 +1085,13 @@ static inline int vnet_skb_map(struct ldc_channel *lp, struct sk_buff *skb,
 		u8 *vaddr;
 
 		if (nc < ncookies) {
-			vaddr = kmap_local_page(skb_frag_page(f));
+			vaddr = kmap_atomic(skb_frag_page(f));
 			blen = skb_frag_size(f);
 			blen += 8 - (blen & 7);
 			err = ldc_map_single(lp, vaddr + skb_frag_off(f),
 					     blen, cookies + nc, ncookies - nc,
 					     map_perm);
-			kunmap_local(vaddr);
+			kunmap_atomic(vaddr);
 		} else {
 			err = -EMSGSIZE;
 		}
@@ -1168,7 +1168,7 @@ static inline struct sk_buff *vnet_skb_shape(struct sk_buff *skb, int ncookies)
 			*(__sum16 *)(skb->data + offset) = 0;
 			csum = skb_copy_and_csum_bits(skb, start,
 						      nskb->data + start,
-						      skb->len - start);
+						      skb->len - start, 0);
 
 			/* add in the header checksums */
 			if (skb->protocol == htons(ETH_P_IP)) {
@@ -1223,7 +1223,7 @@ vnet_handle_offloads(struct vnet_port *port, struct sk_buff *skb,
 {
 	struct net_device *dev = VNET_PORT_TO_NET_DEVICE(port);
 	struct vio_dring_state *dr = &port->vio.drings[VIO_DRIVER_TX_RING];
-	struct sk_buff *segs, *curr, *next;
+	struct sk_buff *segs;
 	int maclen, datalen;
 	int status;
 	int gso_size, gso_type, gso_segs;
@@ -1282,8 +1282,11 @@ vnet_handle_offloads(struct vnet_port *port, struct sk_buff *skb,
 	skb_reset_mac_header(skb);
 
 	status = 0;
-	skb_list_walk_safe(segs, curr, next) {
-		skb_mark_not_on_list(curr);
+	while (segs) {
+		struct sk_buff *curr = segs;
+
+		segs = segs->next;
+		curr->next = NULL;
 		if (port->tso && curr->len > dev->mtu) {
 			skb_shinfo(curr)->gso_size = gso_size;
 			skb_shinfo(curr)->gso_type = gso_type;
@@ -1350,12 +1353,27 @@ sunvnet_start_xmit_common(struct sk_buff *skb, struct net_device *dev,
 		if (vio_version_after_eq(&port->vio, 1, 3))
 			localmtu -= VLAN_HLEN;
 
-		if (skb->protocol == htons(ETH_P_IP))
-			icmp_ndo_send(skb, ICMP_DEST_UNREACH, ICMP_FRAG_NEEDED,
-				      htonl(localmtu));
+		if (skb->protocol == htons(ETH_P_IP)) {
+			struct flowi4 fl4;
+			struct rtable *rt = NULL;
+
+			memset(&fl4, 0, sizeof(fl4));
+			fl4.flowi4_oif = dev->ifindex;
+			fl4.flowi4_tos = RT_TOS(ip_hdr(skb)->tos);
+			fl4.daddr = ip_hdr(skb)->daddr;
+			fl4.saddr = ip_hdr(skb)->saddr;
+
+			rt = ip_route_output_key(dev_net(dev), &fl4);
+			if (!IS_ERR(rt)) {
+				skb_dst_set(skb, &rt->dst);
+				icmp_send(skb, ICMP_DEST_UNREACH,
+					  ICMP_FRAG_NEEDED,
+					  htonl(localmtu));
+			}
+		}
 #if IS_ENABLED(CONFIG_IPV6)
 		else if (skb->protocol == htons(ETH_P_IPV6))
-			icmpv6_ndo_send(skb, ICMPV6_PKT_TOOBIG, 0, localmtu);
+			icmpv6_send(skb, ICMPV6_PKT_TOOBIG, 0, localmtu);
 #endif
 		goto out_dropped;
 	}
@@ -1521,7 +1539,7 @@ out_dropped:
 }
 EXPORT_SYMBOL_GPL(sunvnet_start_xmit_common);
 
-void sunvnet_tx_timeout_common(struct net_device *dev, unsigned int txqueue)
+void sunvnet_tx_timeout_common(struct net_device *dev)
 {
 	/* XXX Implement me XXX */
 }

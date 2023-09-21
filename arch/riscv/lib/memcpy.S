@@ -7,8 +7,7 @@
 #include <asm/asm.h>
 
 /* void *memcpy(void *, const void *, size_t) */
-ENTRY(__memcpy)
-WEAK(memcpy)
+ENTRY(memcpy)
 	move t6, a0  /* Preserve return value */
 
 	/* Defer to byte-oriented copy for small sizes */
@@ -105,6 +104,4 @@ WEAK(memcpy)
 	bltu a1, a3, 5b
 6:
 	ret
-END(__memcpy)
-SYM_FUNC_ALIAS(__pi_memcpy, __memcpy)
-SYM_FUNC_ALIAS(__pi___memcpy, __memcpy)
+END(memcpy)

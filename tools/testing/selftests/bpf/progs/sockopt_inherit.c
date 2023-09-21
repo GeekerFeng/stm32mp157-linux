@@ -1,8 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <linux/bpf.h>
-#include <bpf/bpf_helpers.h>
+#include "bpf_helpers.h"
 
 char _license[] SEC("license") = "GPL";
+__u32 _version SEC("version") = 1;
 
 #define SOL_CUSTOM			0xdeadbeef
 #define CUSTOM_INHERIT1			0

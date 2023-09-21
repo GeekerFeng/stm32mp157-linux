@@ -9,8 +9,6 @@
 #include <asm/hardware/cache-l2x0.h>
 #include "hardware.h"
 
-.arch armv7-a
-
 /*
  * ==================== low level suspend ====================
  *
@@ -69,7 +67,6 @@
 #define MX6Q_CCM_CCR	0x0
 
 	.align 3
-	.arm
 
 	.macro  sync_l2_cache
 

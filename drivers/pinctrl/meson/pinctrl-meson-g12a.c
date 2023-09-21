@@ -283,8 +283,6 @@ static const unsigned int pwm_d_x6_pins[]		= { GPIOX_6 };
 static const unsigned int pwm_e_pins[]			= { GPIOX_16 };
 
 /* pwm_f */
-static const unsigned int pwm_f_z_pins[]		= { GPIOZ_12 };
-static const unsigned int pwm_f_a_pins[]		= { GPIOA_11 };
 static const unsigned int pwm_f_x_pins[]		= { GPIOX_7 };
 static const unsigned int pwm_f_h_pins[]		= { GPIOH_5 };
 
@@ -620,7 +618,6 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(tdm_c_dout2_z,		4),
 	GROUP(tdm_c_dout3_z,		4),
 	GROUP(mclk1_z,			4),
-	GROUP(pwm_f_z,			5),
 
 	/* bank GPIOX */
 	GROUP(sdio_d0,			1),
@@ -771,7 +768,6 @@ static struct meson_pmx_group meson_g12a_periphs_groups[] = {
 	GROUP(tdm_c_dout3_a,		2),
 	GROUP(mclk0_a,			1),
 	GROUP(mclk1_a,			2),
-	GROUP(pwm_f_a,			3),
 };
 
 /* uart_ao_a */
@@ -1073,7 +1069,7 @@ static const char * const pwm_e_groups[] = {
 };
 
 static const char * const pwm_f_groups[] = {
-	"pwm_f_z", "pwm_f_a", "pwm_f_x", "pwm_f_h",
+	"pwm_f_x", "pwm_f_h",
 };
 
 static const char * const cec_ao_a_h_groups[] = {
@@ -1366,14 +1362,6 @@ static struct meson_axg_pmx_data meson_g12a_aobus_pmx_banks_data = {
 	.num_pmx_banks	= ARRAY_SIZE(meson_g12a_aobus_pmx_banks),
 };
 
-static int meson_g12a_aobus_parse_dt_extra(struct meson_pinctrl *pc)
-{
-	pc->reg_pull = pc->reg_gpio;
-	pc->reg_pullen = pc->reg_gpio;
-
-	return 0;
-}
-
 static struct meson_pinctrl_data meson_g12a_periphs_pinctrl_data = {
 	.name		= "periphs-banks",
 	.pins		= meson_g12a_periphs_pins,
@@ -1400,7 +1388,6 @@ static struct meson_pinctrl_data meson_g12a_aobus_pinctrl_data = {
 	.num_banks	= ARRAY_SIZE(meson_g12a_aobus_banks),
 	.pmx_ops	= &meson_axg_pmx_ops,
 	.pmx_data	= &meson_g12a_aobus_pmx_banks_data,
-	.parse_dt	= meson_g12a_aobus_parse_dt_extra,
 };
 
 static const struct of_device_id meson_g12a_pinctrl_dt_match[] = {
@@ -1414,7 +1401,6 @@ static const struct of_device_id meson_g12a_pinctrl_dt_match[] = {
 	},
 	{ },
 };
-MODULE_DEVICE_TABLE(of, meson_g12a_pinctrl_dt_match);
 
 static struct platform_driver meson_g12a_pinctrl_driver = {
 	.probe  = meson_pinctrl_probe,
@@ -1424,5 +1410,4 @@ static struct platform_driver meson_g12a_pinctrl_driver = {
 	},
 };
 
-module_platform_driver(meson_g12a_pinctrl_driver);
-MODULE_LICENSE("Dual BSD/GPL");
+builtin_platform_driver(meson_g12a_pinctrl_driver);

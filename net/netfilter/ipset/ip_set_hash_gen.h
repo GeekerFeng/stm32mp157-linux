@@ -37,12 +37,37 @@
  */
 
 /* Number of elements to store in an initial array block */
-#define AHASH_INIT_SIZE			2
+#define AHASH_INIT_SIZE			4
 /* Max number of elements to store in an array block */
-#define AHASH_MAX_SIZE			(6 * AHASH_INIT_SIZE)
+#define AHASH_MAX_SIZE			(3 * AHASH_INIT_SIZE)
 /* Max muber of elements in the array block when tuned */
 #define AHASH_MAX_TUNED			64
-#define AHASH_MAX(h)			((h)->bucketsize)
+
+/* Max number of elements can be tuned */
+#ifdef IP_SET_HASH_WITH_MULTI
+#define AHASH_MAX(h)			((h)->ahash_max)
+
+static inline u8
+tune_ahash_max(u8 curr, u32 multi)
+{
+	u32 n;
+
+	if (multi < curr)
+		return curr;
+
+	n = curr + AHASH_INIT_SIZE;
+	/* Currently, at listing one hash bucket must fit into a message.
+	 * Therefore we have a hard limit here.
+	 */
+	return n > curr && n <= AHASH_MAX_TUNED ? n : curr;
+}
+
+#define TUNE_AHASH_MAX(h, multi)	\
+	((h)->ahash_max = tune_ahash_max((h)->ahash_max, multi))
+#else
+#define AHASH_MAX(h)			AHASH_MAX_SIZE
+#define TUNE_AHASH_MAX(h, multi)
+#endif
 
 /* A hash bucket */
 struct hbucket {
@@ -51,7 +76,7 @@ struct hbucket {
 	DECLARE_BITMAP(used, AHASH_MAX_TUNED);
 	u8 size;		/* size of the array */
 	u8 pos;			/* position of the first free entry */
-	unsigned char value[]	/* the array of the values */
+	unsigned char value[0]	/* the array of the values */
 		__aligned(__alignof__(u64));
 };
 
@@ -84,7 +109,7 @@ struct htable {
 	u8 htable_bits;		/* size of hash table == 2^htable_bits */
 	u32 maxelem;		/* Maxelem per region */
 	struct ip_set_region *hregion;	/* Region locks and ext sizes */
-	struct hbucket __rcu *bucket[]; /* hashtable buckets */
+	struct hbucket __rcu *bucket[0]; /* hashtable buckets */
 };
 
 #define hbucket(h, i)		((h)->bucket[i])
@@ -107,15 +132,29 @@ htable_size(u8 hbits)
 {
 	size_t hsize;
 
-	/* We must fit both into u32 in jhash and INT_MAX in kvmalloc_node() */
+	/* We must fit both into u32 in jhash and size_t */
 	if (hbits > 31)
 		return 0;
 	hsize = jhash_size(hbits);
-	if ((INT_MAX - sizeof(struct htable)) / sizeof(struct hbucket *)
+	if ((((size_t)-1) - sizeof(struct htable)) / sizeof(struct hbucket *)
 	    < hsize)
 		return 0;
 
 	return hsize * sizeof(struct hbucket *) + sizeof(struct htable);
+}
+
+/* Compute htable_bits from the user input parameter hashsize */
+static u8
+htable_bits(u32 hashsize)
+{
+	/* Assume that hashsize == 2^htable_bits */
+	u8 bits = fls(hashsize - 1);
+
+	if (jhash_size(bits) != hashsize)
+		/* Round up to the first 2^n value */
+		bits = fls(hashsize);
+
+	return bits;
 }
 
 #ifdef IP_SET_HASH_WITH_NETS
@@ -158,17 +197,6 @@ htable_size(u8 hbits)
 #define SET_ELEM_EXPIRED(set, d)	\
 	(SET_WITH_TIMEOUT(set) &&	\
 	 ip_set_timeout_expired(ext_timeout(d, set)))
-
-#if defined(IP_SET_HASH_WITH_NETMASK) || defined(IP_SET_HASH_WITH_BITMASK)
-static const union nf_inet_addr onesmask = {
-	.all[0] = 0xffffffff,
-	.all[1] = 0xffffffff,
-	.all[2] = 0xffffffff,
-	.all[3] = 0xffffffff
-};
-
-static const union nf_inet_addr zeromask = {};
-#endif
 
 #endif /* _IP_SET_HASH_GEN_H */
 
@@ -293,10 +321,11 @@ struct htype {
 #ifdef IP_SET_HASH_WITH_MARKMASK
 	u32 markmask;		/* markmask value for mark mask to store */
 #endif
-	u8 bucketsize;		/* max elements in an array block */
-#if defined(IP_SET_HASH_WITH_NETMASK) || defined(IP_SET_HASH_WITH_BITMASK)
+#ifdef IP_SET_HASH_WITH_MULTI
+	u8 ahash_max;		/* max elements in an array block */
+#endif
+#ifdef IP_SET_HASH_WITH_NETMASK
 	u8 netmask;		/* netmask value for subnets to store */
-	union nf_inet_addr bitmask;	/* stores bitmask */
 #endif
 	struct list_head ad;	/* Resize add|del backlist */
 	struct mtype_elem next; /* temporary storage for uadd */
@@ -471,8 +500,8 @@ mtype_same_set(const struct ip_set *a, const struct ip_set *b)
 	/* Resizing changes htable_bits, so we ignore it */
 	return x->maxelem == y->maxelem &&
 	       a->timeout == b->timeout &&
-#if defined(IP_SET_HASH_WITH_NETMASK) || defined(IP_SET_HASH_WITH_BITMASK)
-	       nf_inet_addr_cmp(&x->bitmask, &y->bitmask) &&
+#ifdef IP_SET_HASH_WITH_NETMASK
+	       x->netmask == y->netmask &&
 #endif
 #ifdef IP_SET_HASH_WITH_MARKMASK
 	       x->markmask == y->markmask &&
@@ -615,7 +644,7 @@ mtype_resize(struct ip_set *set, bool retried)
 	struct htype *h = set->data;
 	struct htable *t, *orig;
 	u8 htable_bits;
-	size_t hsize, dsize = set->dsize;
+	size_t dsize = set->dsize;
 #ifdef IP_SET_HASH_WITH_NETS
 	u8 flags;
 	struct mtype_elem *tmp;
@@ -639,19 +668,21 @@ mtype_resize(struct ip_set *set, bool retried)
 retry:
 	ret = 0;
 	htable_bits++;
-	if (!htable_bits)
-		goto hbwarn;
-	hsize = htable_size(htable_bits);
-	if (!hsize)
-		goto hbwarn;
-	t = ip_set_alloc(hsize);
+	if (!htable_bits) {
+		/* In case we have plenty of memory :-) */
+		pr_warn("Cannot increase the hashsize of set %s further\n",
+			set->name);
+		ret = -IPSET_ERR_HASH_FULL;
+		goto out;
+	}
+	t = ip_set_alloc(htable_size(htable_bits));
 	if (!t) {
 		ret = -ENOMEM;
 		goto out;
 	}
 	t->hregion = ip_set_alloc(ahash_sizeof_regions(htable_bits));
 	if (!t->hregion) {
-		ip_set_free(t);
+		kfree(t);
 		ret = -ENOMEM;
 		goto out;
 	}
@@ -786,12 +817,6 @@ cleanup:
 	if (ret == -EAGAIN)
 		goto retry;
 	goto out;
-
-hbwarn:
-	/* In case we have plenty of memory :-) */
-	pr_warn("Cannot increase the hashsize of set %s further\n", set->name);
-	ret = -IPSET_ERR_HASH_FULL;
-	goto out;
 }
 
 /* Get the current number of elements and ext_size in the set  */
@@ -925,12 +950,7 @@ mtype_add(struct ip_set *set, void *value, const struct ip_set_ext *ext,
 		goto set_full;
 	/* Create a new slot */
 	if (n->pos >= n->size) {
-#ifdef IP_SET_HASH_WITH_MULTI
-		if (h->bucketsize >= AHASH_MAX_TUNED)
-			goto set_full;
-		else if (h->bucketsize <= multi)
-			h->bucketsize += AHASH_INIT_SIZE;
-#endif
+		TUNE_AHASH_MAX(h, multi);
 		if (n->size >= AHASH_MAX(h)) {
 			/* Trigger rehashing */
 			mtype_data_next(&h->next, d);
@@ -1132,7 +1152,7 @@ out:
 	return ret;
 }
 
-static int
+static inline int
 mtype_data_match(struct mtype_elem *data, const struct ip_set_ext *ext,
 		 struct ip_set_ext *mext, struct ip_set *set, u32 flags)
 {
@@ -1276,32 +1296,15 @@ mtype_head(struct ip_set *set, struct sk_buff *skb)
 			  htonl(jhash_size(htable_bits))) ||
 	    nla_put_net32(skb, IPSET_ATTR_MAXELEM, htonl(h->maxelem)))
 		goto nla_put_failure;
-#ifdef IP_SET_HASH_WITH_BITMASK
-	/* if netmask is set to anything other than HOST_MASK we know that the user supplied netmask
-	 * and not bitmask. These two are mutually exclusive. */
-	if (h->netmask == HOST_MASK && !nf_inet_addr_cmp(&onesmask, &h->bitmask)) {
-		if (set->family == NFPROTO_IPV4) {
-			if (nla_put_ipaddr4(skb, IPSET_ATTR_BITMASK, h->bitmask.ip))
-				goto nla_put_failure;
-		} else if (set->family == NFPROTO_IPV6) {
-			if (nla_put_ipaddr6(skb, IPSET_ATTR_BITMASK, &h->bitmask.in6))
-				goto nla_put_failure;
-		}
-	}
-#endif
 #ifdef IP_SET_HASH_WITH_NETMASK
-	if (h->netmask != HOST_MASK && nla_put_u8(skb, IPSET_ATTR_NETMASK, h->netmask))
+	if (h->netmask != HOST_MASK &&
+	    nla_put_u8(skb, IPSET_ATTR_NETMASK, h->netmask))
 		goto nla_put_failure;
 #endif
 #ifdef IP_SET_HASH_WITH_MARKMASK
 	if (nla_put_u32(skb, IPSET_ATTR_MARKMASK, h->markmask))
 		goto nla_put_failure;
 #endif
-	if (set->flags & IPSET_CREATE_FLAG_BUCKETSIZE) {
-		if (nla_put_u8(skb, IPSET_ATTR_BUCKETSIZE, h->bucketsize) ||
-		    nla_put_net32(skb, IPSET_ATTR_INITVAL, htonl(h->initval)))
-			goto nla_put_failure;
-	}
 	if (nla_put_net32(skb, IPSET_ATTR_REFERENCES, htonl(set->ref)) ||
 	    nla_put_net32(skb, IPSET_ATTR_MEMSIZE, htonl(memsize)) ||
 	    nla_put_net32(skb, IPSET_ATTR_ELEMENTS, htonl(elements)))
@@ -1453,10 +1456,8 @@ IPSET_TOKEN(HTYPE, _create)(struct net *net, struct ip_set *set,
 	u32 markmask;
 #endif
 	u8 hbits;
-#if defined(IP_SET_HASH_WITH_NETMASK) || defined(IP_SET_HASH_WITH_BITMASK)
-	int ret __attribute__((unused)) = 0;
-	u8 netmask = set->family == NFPROTO_IPV4 ? 32 : 128;
-	union nf_inet_addr bitmask = onesmask;
+#ifdef IP_SET_HASH_WITH_NETMASK
+	u8 netmask;
 #endif
 	size_t hsize;
 	struct htype *h;
@@ -1494,39 +1495,13 @@ IPSET_TOKEN(HTYPE, _create)(struct net *net, struct ip_set *set,
 #endif
 
 #ifdef IP_SET_HASH_WITH_NETMASK
+	netmask = set->family == NFPROTO_IPV4 ? 32 : 128;
 	if (tb[IPSET_ATTR_NETMASK]) {
 		netmask = nla_get_u8(tb[IPSET_ATTR_NETMASK]);
 
 		if ((set->family == NFPROTO_IPV4 && netmask > 32) ||
 		    (set->family == NFPROTO_IPV6 && netmask > 128) ||
 		    netmask == 0)
-			return -IPSET_ERR_INVALID_NETMASK;
-
-		/* we convert netmask to bitmask and store it */
-		if (set->family == NFPROTO_IPV4)
-			bitmask.ip = ip_set_netmask(netmask);
-		else
-			ip6_netmask(&bitmask, netmask);
-	}
-#endif
-
-#ifdef IP_SET_HASH_WITH_BITMASK
-	if (tb[IPSET_ATTR_BITMASK]) {
-		/* bitmask and netmask do the same thing, allow only one of these options */
-		if (tb[IPSET_ATTR_NETMASK])
-			return -IPSET_ERR_BITMASK_NETMASK_EXCL;
-
-		if (set->family == NFPROTO_IPV4) {
-			ret = ip_set_get_ipaddr4(tb[IPSET_ATTR_BITMASK], &bitmask.ip);
-			if (ret || !bitmask.ip)
-				return -IPSET_ERR_INVALID_NETMASK;
-		} else if (set->family == NFPROTO_IPV6) {
-			ret = ip_set_get_ipaddr6(tb[IPSET_ATTR_BITMASK], &bitmask);
-			if (ret || ipv6_addr_any(&bitmask.in6))
-				return -IPSET_ERR_INVALID_NETMASK;
-		}
-
-		if (nf_inet_addr_cmp(&bitmask, &zeromask))
 			return -IPSET_ERR_INVALID_NETMASK;
 	}
 #endif
@@ -1545,11 +1520,7 @@ IPSET_TOKEN(HTYPE, _create)(struct net *net, struct ip_set *set,
 	if (!h)
 		return -ENOMEM;
 
-	/* Compute htable_bits from the user input parameter hashsize.
-	 * Assume that hashsize == 2^htable_bits,
-	 * otherwise round up to the first 2^n value.
-	 */
-	hbits = fls(hashsize - 1);
+	hbits = htable_bits(hashsize);
 	hsize = htable_size(hbits);
 	if (hsize == 0) {
 		kfree(h);
@@ -1562,7 +1533,7 @@ IPSET_TOKEN(HTYPE, _create)(struct net *net, struct ip_set *set,
 	}
 	t->hregion = ip_set_alloc(ahash_sizeof_regions(hbits));
 	if (!t->hregion) {
-		ip_set_free(t);
+		kfree(t);
 		kfree(h);
 		return -ENOMEM;
 	}
@@ -1570,27 +1541,14 @@ IPSET_TOKEN(HTYPE, _create)(struct net *net, struct ip_set *set,
 	for (i = 0; i < ahash_numof_locks(hbits); i++)
 		spin_lock_init(&t->hregion[i].lock);
 	h->maxelem = maxelem;
-#if defined(IP_SET_HASH_WITH_NETMASK) || defined(IP_SET_HASH_WITH_BITMASK)
-	h->bitmask = bitmask;
+#ifdef IP_SET_HASH_WITH_NETMASK
 	h->netmask = netmask;
 #endif
 #ifdef IP_SET_HASH_WITH_MARKMASK
 	h->markmask = markmask;
 #endif
-	if (tb[IPSET_ATTR_INITVAL])
-		h->initval = ntohl(nla_get_be32(tb[IPSET_ATTR_INITVAL]));
-	else
-		get_random_bytes(&h->initval, sizeof(h->initval));
-	h->bucketsize = AHASH_MAX_SIZE;
-	if (tb[IPSET_ATTR_BUCKETSIZE]) {
-		h->bucketsize = nla_get_u8(tb[IPSET_ATTR_BUCKETSIZE]);
-		if (h->bucketsize < AHASH_INIT_SIZE)
-			h->bucketsize = AHASH_INIT_SIZE;
-		else if (h->bucketsize > AHASH_MAX_SIZE)
-			h->bucketsize = AHASH_MAX_SIZE;
-		else if (h->bucketsize % 2)
-			h->bucketsize += 1;
-	}
+	get_random_bytes(&h->initval, sizeof(h->initval));
+
 	t->htable_bits = hbits;
 	t->maxelem = h->maxelem / ahash_numof_locks(hbits);
 	RCU_INIT_POINTER(h->table, t);

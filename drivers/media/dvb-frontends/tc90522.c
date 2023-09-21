@@ -685,33 +685,10 @@ tc90522_master_xfer(struct i2c_adapter *adap, struct i2c_msg *msgs, int num)
 		p += new_msgs[j].len;
 	}
 
-	if (i < num) {
+	if (i < num)
 		ret = -ENOMEM;
-	} else if (!state->cfg.split_tuner_read_i2c || rd_num == 0) {
+	else
 		ret = i2c_transfer(state->i2c_client->adapter, new_msgs, j);
-	} else {
-		/*
-		 * Split transactions at each I2C_M_RD message.
-		 * Some of the parent device require this,
-		 * such as Friio (see. dvb-usb-gl861).
-		 */
-		int from, to;
-
-		ret = 0;
-		from = 0;
-		do {
-			int r;
-
-			to = from + 1;
-			while (to < j && !(new_msgs[to].flags & I2C_M_RD))
-				to++;
-			r = i2c_transfer(state->i2c_client->adapter,
-					 &new_msgs[from], to - from);
-			ret = (r <= 0) ? r : ret + r;
-			from = to;
-		} while (from < j && ret > 0);
-	}
-
 	if (ret >= 0 && ret < j)
 		ret = -EIO;
 	kfree(new_msgs);
@@ -779,9 +756,9 @@ static const struct dvb_frontend_ops tc90522_ops_ter = {
 };
 
 
-static int tc90522_probe(struct i2c_client *client)
+static int tc90522_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct tc90522_state *state;
 	struct tc90522_config *cfg;
 	const struct dvb_frontend_ops *ops;
@@ -819,13 +796,14 @@ free_state:
 	return ret;
 }
 
-static void tc90522_remove(struct i2c_client *client)
+static int tc90522_remove(struct i2c_client *client)
 {
 	struct tc90522_state *state;
 
 	state = cfg_to_state(i2c_get_clientdata(client));
 	i2c_del_adapter(&state->tuner_i2c);
 	kfree(state);
+	return 0;
 }
 
 
@@ -840,7 +818,7 @@ static struct i2c_driver tc90522_driver = {
 	.driver = {
 		.name	= "tc90522",
 	},
-	.probe_new	= tc90522_probe,
+	.probe		= tc90522_probe,
 	.remove		= tc90522_remove,
 	.id_table	= tc90522_id,
 };

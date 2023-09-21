@@ -147,10 +147,7 @@ static int rpi_exp_gpio_get_direction(struct gpio_chip *gc, unsigned int off)
 			get.gpio);
 		return ret ? ret : -EIO;
 	}
-	if (get.direction)
-		return GPIO_LINE_DIRECTION_OUT;
-
-	return GPIO_LINE_DIRECTION_IN;
+	return !get.direction;
 }
 
 static int rpi_exp_gpio_get(struct gpio_chip *gc, unsigned int off)
@@ -208,7 +205,7 @@ static int rpi_exp_gpio_probe(struct platform_device *pdev)
 		return -ENOENT;
 	}
 
-	fw = devm_rpi_firmware_get(&pdev->dev, fw_node);
+	fw = rpi_firmware_get(fw_node);
 	of_node_put(fw_node);
 	if (!fw)
 		return -EPROBE_DEFER;
@@ -221,6 +218,7 @@ static int rpi_exp_gpio_probe(struct platform_device *pdev)
 	rpi_gpio->gc.parent = dev;
 	rpi_gpio->gc.label = MODULE_NAME;
 	rpi_gpio->gc.owner = THIS_MODULE;
+	rpi_gpio->gc.of_node = np;
 	rpi_gpio->gc.base = -1;
 	rpi_gpio->gc.ngpio = NUM_GPIO;
 
@@ -234,7 +232,7 @@ static int rpi_exp_gpio_probe(struct platform_device *pdev)
 	return devm_gpiochip_add_data(dev, &rpi_gpio->gc, rpi_gpio);
 }
 
-static const struct of_device_id rpi_exp_gpio_ids[] __maybe_unused = {
+static const struct of_device_id rpi_exp_gpio_ids[] = {
 	{ .compatible = "raspberrypi,firmware-gpio" },
 	{ }
 };

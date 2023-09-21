@@ -12,7 +12,7 @@
 #include <linux/netlink.h>
 #include <linux/netfilter.h>
 #include <linux/netfilter/nf_tables.h>
-#include <net/netfilter/nf_tables_core.h>
+#include <net/netfilter/nf_tables.h>
 #include <net/netfilter/nf_conntrack.h>
 #include <net/netfilter/nf_conntrack_acct.h>
 #include <net/netfilter/nf_conntrack_tuple.h>
@@ -23,6 +23,15 @@
 #include <net/netfilter/nf_conntrack_l4proto.h>
 #include <net/netfilter/nf_conntrack_expect.h>
 
+struct nft_ct {
+	enum nft_ct_keys	key:8;
+	enum ip_conntrack_dir	dir:8;
+	union {
+		enum nft_registers	dreg:8;
+		enum nft_registers	sreg:8;
+	};
+};
+
 struct nft_ct_helper_obj  {
 	struct nf_conntrack_helper *helper4;
 	struct nf_conntrack_helper *helper6;
@@ -32,7 +41,6 @@ struct nft_ct_helper_obj  {
 #ifdef CONFIG_NF_CONNTRACK_ZONES
 static DEFINE_PER_CPU(struct nf_conn *, nft_ct_pcpu_template);
 static unsigned int nft_ct_pcpu_template_refcnt __read_mostly;
-static DEFINE_MUTEX(nft_ct_pcpu_mutex);
 #endif
 
 static u64 nft_ct_get_eval_counter(const struct nf_conn_counter *c,
@@ -88,7 +96,7 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 		return;
 #ifdef CONFIG_NF_CONNTRACK_MARK
 	case NFT_CT_MARK:
-		*dest = READ_ONCE(ct->mark);
+		*dest = ct->mark;
 		return;
 #endif
 #ifdef CONFIG_NF_CONNTRACK_SECMARK
@@ -121,7 +129,7 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 		return;
 	}
 #endif
-	case NFT_CT_BYTES:
+	case NFT_CT_BYTES: /* fallthrough */
 	case NFT_CT_PKTS: {
 		const struct nf_conn_acct *acct = nf_conn_acct_find(ct);
 		u64 count = 0;
@@ -169,6 +177,8 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 	}
 #endif
 	case NFT_CT_ID:
+		if (!nf_ct_is_confirmed(ct))
+			goto err;
 		*dest = nf_ct_get_id(ct);
 		return;
 	default:
@@ -194,12 +204,12 @@ static void nft_ct_get_eval(const struct nft_expr *expr,
 	case NFT_CT_SRC_IP:
 		if (nf_ct_l3num(ct) != NFPROTO_IPV4)
 			goto err;
-		*dest = (__force __u32)tuple->src.u3.ip;
+		*dest = tuple->src.u3.ip;
 		return;
 	case NFT_CT_DST_IP:
 		if (nf_ct_l3num(ct) != NFPROTO_IPV4)
 			goto err;
-		*dest = (__force __u32)tuple->dst.u3.ip;
+		*dest = tuple->dst.u3.ip;
 		return;
 	case NFT_CT_SRC_IP6:
 		if (nf_ct_l3num(ct) != NFPROTO_IPV6)
@@ -250,13 +260,10 @@ static void nft_ct_set_zone_eval(const struct nft_expr *expr,
 
 	ct = this_cpu_read(nft_ct_pcpu_template);
 
-	if (likely(refcount_read(&ct->ct_general.use) == 1)) {
-		refcount_inc(&ct->ct_general.use);
+	if (likely(atomic_read(&ct->ct_general.use) == 1)) {
 		nf_ct_zone_add(ct, &zone);
 	} else {
-		/* previous skb got queued to userspace, allocate temporary
-		 * one until percpu template can be reused.
-		 */
+		/* previous skb got queued to userspace */
 		ct = nf_ct_tmpl_alloc(nft_net(pkt), &zone, GFP_ATOMIC);
 		if (!ct) {
 			regs->verdict.code = NF_DROP;
@@ -264,6 +271,7 @@ static void nft_ct_set_zone_eval(const struct nft_expr *expr,
 		}
 	}
 
+	atomic_inc(&ct->ct_general.use);
 	nf_ct_set(skb, ct, IP_CT_NEW);
 }
 #endif
@@ -287,8 +295,8 @@ static void nft_ct_set_eval(const struct nft_expr *expr,
 	switch (priv->key) {
 #ifdef CONFIG_NF_CONNTRACK_MARK
 	case NFT_CT_MARK:
-		if (READ_ONCE(ct->mark) != value) {
-			WRITE_ONCE(ct->mark, value);
+		if (ct->mark != value) {
+			ct->mark = value;
 			nf_conntrack_event_cache(IPCT_MARK, ct);
 		}
 		break;
@@ -368,6 +376,7 @@ static bool nft_ct_tmpl_alloc_pcpu(void)
 			return false;
 		}
 
+		atomic_set(&tmp->ct_general.use, 1);
 		per_cpu(nft_ct_pcpu_template, cpu) = tmp;
 	}
 
@@ -431,12 +440,12 @@ static int nft_ct_get_init(const struct nft_ctx *ctx,
 
 		switch (ctx->family) {
 		case NFPROTO_IPV4:
-			len = sizeof_field(struct nf_conntrack_tuple,
+			len = FIELD_SIZEOF(struct nf_conntrack_tuple,
 					   src.u3.ip);
 			break;
 		case NFPROTO_IPV6:
 		case NFPROTO_INET:
-			len = sizeof_field(struct nf_conntrack_tuple,
+			len = FIELD_SIZEOF(struct nf_conntrack_tuple,
 					   src.u3.ip6);
 			break;
 		default:
@@ -448,20 +457,20 @@ static int nft_ct_get_init(const struct nft_ctx *ctx,
 		if (tb[NFTA_CT_DIRECTION] == NULL)
 			return -EINVAL;
 
-		len = sizeof_field(struct nf_conntrack_tuple, src.u3.ip);
+		len = FIELD_SIZEOF(struct nf_conntrack_tuple, src.u3.ip);
 		break;
 	case NFT_CT_SRC_IP6:
 	case NFT_CT_DST_IP6:
 		if (tb[NFTA_CT_DIRECTION] == NULL)
 			return -EINVAL;
 
-		len = sizeof_field(struct nf_conntrack_tuple, src.u3.ip6);
+		len = FIELD_SIZEOF(struct nf_conntrack_tuple, src.u3.ip6);
 		break;
 	case NFT_CT_PROTO_SRC:
 	case NFT_CT_PROTO_DST:
 		if (tb[NFTA_CT_DIRECTION] == NULL)
 			return -EINVAL;
-		len = sizeof_field(struct nf_conntrack_tuple, src.u.all);
+		len = FIELD_SIZEOF(struct nf_conntrack_tuple, src.u.all);
 		break;
 	case NFT_CT_BYTES:
 	case NFT_CT_PKTS:
@@ -491,9 +500,9 @@ static int nft_ct_get_init(const struct nft_ctx *ctx,
 		}
 	}
 
-	priv->len = len;
-	err = nft_parse_register_store(ctx, tb[NFTA_CT_DREG], &priv->dreg, NULL,
-				       NFT_DATA_VALUE, len);
+	priv->dreg = nft_parse_register(tb[NFTA_CT_DREG]);
+	err = nft_validate_register_store(ctx, priv->dreg, NULL,
+					  NFT_DATA_VALUE, len);
 	if (err < 0)
 		return err;
 
@@ -519,11 +528,8 @@ static void __nft_ct_set_destroy(const struct nft_ctx *ctx, struct nft_ct *priv)
 #endif
 #ifdef CONFIG_NF_CONNTRACK_ZONES
 	case NFT_CT_ZONE:
-		mutex_lock(&nft_ct_pcpu_mutex);
 		if (--nft_ct_pcpu_template_refcnt == 0)
 			nft_ct_tmpl_put_pcpu();
-		mutex_unlock(&nft_ct_pcpu_mutex);
-		break;
 #endif
 	default:
 		break;
@@ -545,7 +551,7 @@ static int nft_ct_set_init(const struct nft_ctx *ctx,
 	case NFT_CT_MARK:
 		if (tb[NFTA_CT_DIRECTION])
 			return -EINVAL;
-		len = sizeof_field(struct nf_conn, mark);
+		len = FIELD_SIZEOF(struct nf_conn, mark);
 		break;
 #endif
 #ifdef CONFIG_NF_CONNTRACK_LABELS
@@ -560,13 +566,9 @@ static int nft_ct_set_init(const struct nft_ctx *ctx,
 #endif
 #ifdef CONFIG_NF_CONNTRACK_ZONES
 	case NFT_CT_ZONE:
-		mutex_lock(&nft_ct_pcpu_mutex);
-		if (!nft_ct_tmpl_alloc_pcpu()) {
-			mutex_unlock(&nft_ct_pcpu_mutex);
+		if (!nft_ct_tmpl_alloc_pcpu())
 			return -ENOMEM;
-		}
 		nft_ct_pcpu_template_refcnt++;
-		mutex_unlock(&nft_ct_pcpu_mutex);
 		len = sizeof(u16);
 		break;
 #endif
@@ -600,8 +602,8 @@ static int nft_ct_set_init(const struct nft_ctx *ctx,
 		}
 	}
 
-	priv->len = len;
-	err = nft_parse_register_load(tb[NFTA_CT_SREG], &priv->sreg, len);
+	priv->sreg = nft_parse_register(tb[NFTA_CT_SREG]);
+	err = nft_validate_register_load(priv->sreg, len);
 	if (err < 0)
 		goto err1;
 
@@ -631,8 +633,7 @@ static void nft_ct_set_destroy(const struct nft_ctx *ctx,
 	nf_ct_netns_put(ctx->net, ctx->family);
 }
 
-static int nft_ct_get_dump(struct sk_buff *skb,
-			   const struct nft_expr *expr, bool reset)
+static int nft_ct_get_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_ct *priv = nft_expr_priv(expr);
 
@@ -671,31 +672,7 @@ nla_put_failure:
 	return -1;
 }
 
-static bool nft_ct_get_reduce(struct nft_regs_track *track,
-			      const struct nft_expr *expr)
-{
-	const struct nft_ct *priv = nft_expr_priv(expr);
-	const struct nft_ct *ct;
-
-	if (!nft_reg_track_cmp(track, expr, priv->dreg)) {
-		nft_reg_track_update(track, expr, priv->dreg, priv->len);
-		return false;
-	}
-
-	ct = nft_expr_priv(track->regs[priv->dreg].selector);
-	if (priv->key != ct->key) {
-		nft_reg_track_update(track, expr, priv->dreg, priv->len);
-		return false;
-	}
-
-	if (!track->regs[priv->dreg].bitwise)
-		return true;
-
-	return nft_expr_reduce_bitwise(track, expr);
-}
-
-static int nft_ct_set_dump(struct sk_buff *skb,
-			   const struct nft_expr *expr, bool reset)
+static int nft_ct_set_dump(struct sk_buff *skb, const struct nft_expr *expr)
 {
 	const struct nft_ct *priv = nft_expr_priv(expr);
 
@@ -728,38 +705,7 @@ static const struct nft_expr_ops nft_ct_get_ops = {
 	.init		= nft_ct_get_init,
 	.destroy	= nft_ct_get_destroy,
 	.dump		= nft_ct_get_dump,
-	.reduce		= nft_ct_get_reduce,
 };
-
-static bool nft_ct_set_reduce(struct nft_regs_track *track,
-			      const struct nft_expr *expr)
-{
-	int i;
-
-	for (i = 0; i < NFT_REG32_NUM; i++) {
-		if (!track->regs[i].selector)
-			continue;
-
-		if (track->regs[i].selector->ops != &nft_ct_get_ops)
-			continue;
-
-		__nft_reg_track_cancel(track, i);
-	}
-
-	return false;
-}
-
-#ifdef CONFIG_RETPOLINE
-static const struct nft_expr_ops nft_ct_get_fast_ops = {
-	.type		= &nft_ct_type,
-	.size		= NFT_EXPR_SIZE(sizeof(struct nft_ct)),
-	.eval		= nft_ct_get_fast_eval,
-	.init		= nft_ct_get_init,
-	.destroy	= nft_ct_get_destroy,
-	.dump		= nft_ct_get_dump,
-	.reduce		= nft_ct_set_reduce,
-};
-#endif
 
 static const struct nft_expr_ops nft_ct_set_ops = {
 	.type		= &nft_ct_type,
@@ -768,7 +714,6 @@ static const struct nft_expr_ops nft_ct_set_ops = {
 	.init		= nft_ct_set_init,
 	.destroy	= nft_ct_set_destroy,
 	.dump		= nft_ct_set_dump,
-	.reduce		= nft_ct_set_reduce,
 };
 
 #ifdef CONFIG_NF_CONNTRACK_ZONES
@@ -779,7 +724,6 @@ static const struct nft_expr_ops nft_ct_set_zone_ops = {
 	.init		= nft_ct_set_init,
 	.destroy	= nft_ct_set_destroy,
 	.dump		= nft_ct_set_dump,
-	.reduce		= nft_ct_set_reduce,
 };
 #endif
 
@@ -793,21 +737,8 @@ nft_ct_select_ops(const struct nft_ctx *ctx,
 	if (tb[NFTA_CT_DREG] && tb[NFTA_CT_SREG])
 		return ERR_PTR(-EINVAL);
 
-	if (tb[NFTA_CT_DREG]) {
-#ifdef CONFIG_RETPOLINE
-		u32 k = ntohl(nla_get_be32(tb[NFTA_CT_KEY]));
-
-		switch (k) {
-		case NFT_CT_STATE:
-		case NFT_CT_DIRECTION:
-		case NFT_CT_STATUS:
-		case NFT_CT_MARK:
-		case NFT_CT_SECMARK:
-			return &nft_ct_get_fast_ops;
-		}
-#endif
+	if (tb[NFTA_CT_DREG])
 		return &nft_ct_get_ops;
-	}
 
 	if (tb[NFTA_CT_SREG]) {
 #ifdef CONFIG_NF_CONNTRACK_ZONES
@@ -849,7 +780,6 @@ static const struct nft_expr_ops nft_notrack_ops = {
 	.type		= &nft_notrack_type,
 	.size		= NFT_EXPR_SIZE(0),
 	.eval		= nft_notrack_eval,
-	.reduce		= NFT_REDUCE_READONLY,
 };
 
 static struct nft_expr_type nft_notrack_type __read_mostly = {
@@ -1060,7 +990,7 @@ static int nft_ct_helper_obj_init(const struct nft_ctx *ctx,
 	if (!priv->l4proto)
 		return -ENOENT;
 
-	nla_strscpy(name, tb[NFTA_CT_HELPER_NAME], sizeof(name));
+	nla_strlcpy(name, tb[NFTA_CT_HELPER_NAME], sizeof(name));
 
 	if (tb[NFTA_CT_HELPER_L3PROTO])
 		family = ntohs(nla_get_be16(tb[NFTA_CT_HELPER_L3PROTO]));
@@ -1083,8 +1013,8 @@ static int nft_ct_helper_obj_init(const struct nft_ctx *ctx,
 		help6 = nf_conntrack_helper_try_module_get(name, family,
 							   priv->l4proto);
 		break;
-	case NFPROTO_NETDEV:
-	case NFPROTO_BRIDGE:
+	case NFPROTO_NETDEV: /* fallthrough */
+	case NFPROTO_BRIDGE: /* same */
 	case NFPROTO_INET:
 		help4 = nf_conntrack_helper_try_module_get(name, NFPROTO_IPV4,
 							   priv->l4proto);
@@ -1290,7 +1220,7 @@ static void nft_ct_expect_obj_eval(struct nft_object *obj,
 	struct nf_conn *ct;
 
 	ct = nf_ct_get(pkt->skb, &ctinfo);
-	if (!ct || nf_ct_is_confirmed(ct) || nf_ct_is_template(ct)) {
+	if (!ct || ctinfo == IP_CT_UNTRACKED) {
 		regs->verdict.code = NFT_BREAK;
 		return;
 	}
@@ -1415,4 +1345,3 @@ MODULE_ALIAS_NFT_EXPR("notrack");
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_HELPER);
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_TIMEOUT);
 MODULE_ALIAS_NFT_OBJ(NFT_OBJECT_CT_EXPECT);
-MODULE_DESCRIPTION("Netfilter nf_tables conntrack module");

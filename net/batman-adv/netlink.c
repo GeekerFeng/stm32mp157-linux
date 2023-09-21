@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0
-/* Copyright (C) B.A.T.M.A.N. contributors:
+/* Copyright (C) 2016-2019  B.A.T.M.A.N. contributors:
  *
  * Matthias Schiffer
  */
@@ -23,7 +23,6 @@
 #include <linux/kernel.h>
 #include <linux/limits.h>
 #include <linux/list.h>
-#include <linux/minmax.h>
 #include <linux/netdevice.h>
 #include <linux/netlink.h>
 #include <linux/printk.h>
@@ -193,7 +192,7 @@ static int batadv_netlink_mesh_fill_ap_isolation(struct sk_buff *msg,
 }
 
 /**
- * batadv_netlink_set_mesh_ap_isolation() - Set ap_isolation from genl msg
+ * batadv_option_set_ap_isolation() - Set ap_isolation from genl msg
  * @attr: parsed BATADV_ATTR_AP_ISOLATION_ENABLED attribute
  * @bat_priv: the bat priv with all the soft interface information
  *
@@ -359,13 +358,15 @@ static int batadv_netlink_mesh_fill(struct sk_buff *msg,
 			atomic_read(&bat_priv->orig_interval)))
 		goto nla_put_failure;
 
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 
 	genlmsg_end(msg, hdr);
 	return 0;
 
 nla_put_failure:
-	batadv_hardif_put(primary_if);
+	if (primary_if)
+		batadv_hardif_put(primary_if);
 
 	genlmsg_cancel(msg, hdr);
 	return -EMSGSIZE;
@@ -639,7 +640,7 @@ batadv_netlink_tp_meter_put(struct sk_buff *msg, u32 cookie)
  * @bat_priv: the bat priv with all the soft interface information
  * @dst: destination of tp_meter session
  * @result: reason for tp meter session stop
- * @test_time: total time of the tp_meter session
+ * @test_time: total time ot the tp_meter session
  * @total_bytes: bytes acked to the receiver
  * @cookie: cookie of tp_meter session
  *
@@ -755,7 +756,7 @@ batadv_netlink_tp_meter_start(struct sk_buff *skb, struct genl_info *info)
 }
 
 /**
- * batadv_netlink_tp_meter_cancel() - Cancel a running tp_meter session
+ * batadv_netlink_tp_meter_start() - Cancel a running tp_meter session
  * @skb: received netlink message
  * @info: receiver information
  *
@@ -812,10 +813,6 @@ static int batadv_netlink_hardif_fill(struct sk_buff *msg,
 			bat_priv->soft_iface->ifindex))
 		goto nla_put_failure;
 
-	if (nla_put_string(msg, BATADV_ATTR_MESH_IFNAME,
-			   bat_priv->soft_iface->name))
-		goto nla_put_failure;
-
 	if (nla_put_u32(msg, BATADV_ATTR_HARD_IFINDEX,
 			net_dev->ifindex) ||
 	    nla_put_string(msg, BATADV_ATTR_HARD_IFNAME,
@@ -828,10 +825,6 @@ static int batadv_netlink_hardif_fill(struct sk_buff *msg,
 		if (nla_put_flag(msg, BATADV_ATTR_ACTIVE))
 			goto nla_put_failure;
 	}
-
-	if (nla_put_u8(msg, BATADV_ATTR_HOP_PENALTY,
-		       atomic_read(&hard_iface->hop_penalty)))
-		goto nla_put_failure;
 
 #ifdef CONFIG_BATMAN_ADV_BATMAN_V
 	if (nla_put_u32(msg, BATADV_ATTR_ELP_INTERVAL,
@@ -927,15 +920,9 @@ static int batadv_netlink_set_hardif(struct sk_buff *skb,
 {
 	struct batadv_hard_iface *hard_iface = info->user_ptr[1];
 	struct batadv_priv *bat_priv = info->user_ptr[0];
-	struct nlattr *attr;
-
-	if (info->attrs[BATADV_ATTR_HOP_PENALTY]) {
-		attr = info->attrs[BATADV_ATTR_HOP_PENALTY];
-
-		atomic_set(&hard_iface->hop_penalty, nla_get_u8(attr));
-	}
 
 #ifdef CONFIG_BATMAN_ADV_BATMAN_V
+	struct nlattr *attr;
 
 	if (info->attrs[BATADV_ATTR_ELP_INTERVAL]) {
 		attr = info->attrs[BATADV_ATTR_ELP_INTERVAL];
@@ -1045,10 +1032,6 @@ static int batadv_netlink_vlan_fill(struct sk_buff *msg,
 
 	if (nla_put_u32(msg, BATADV_ATTR_MESH_IFINDEX,
 			bat_priv->soft_iface->ifindex))
-		goto nla_put_failure;
-
-	if (nla_put_string(msg, BATADV_ATTR_MESH_IFNAME,
-			   bat_priv->soft_iface->name))
 		goto nla_put_failure;
 
 	if (nla_put_u32(msg, BATADV_ATTR_VLANID, vlan->vid & VLAN_VID_MASK))
@@ -1267,8 +1250,7 @@ batadv_get_vlan_from_info(struct batadv_priv *bat_priv, struct net *net,
  *
  * Return: 0 on success or negative error number in case of failure
  */
-static int batadv_pre_doit(const struct genl_split_ops *ops,
-			   struct sk_buff *skb,
+static int batadv_pre_doit(const struct genl_ops *ops, struct sk_buff *skb,
 			   struct genl_info *info)
 {
 	struct net *net = genl_info_net(info);
@@ -1333,8 +1315,7 @@ err_put_softif:
  * @skb: Netlink message with request data
  * @info: receiver information
  */
-static void batadv_post_doit(const struct genl_split_ops *ops,
-			     struct sk_buff *skb,
+static void batadv_post_doit(const struct genl_ops *ops, struct sk_buff *skb,
 			     struct genl_info *info)
 {
 	struct batadv_hard_iface *hard_iface;
@@ -1359,7 +1340,7 @@ static void batadv_post_doit(const struct genl_split_ops *ops,
 	}
 }
 
-static const struct genl_small_ops batadv_netlink_ops[] = {
+static const struct genl_ops batadv_netlink_ops[] = {
 	{
 		.cmd = BATADV_CMD_GET_MESH,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
@@ -1370,21 +1351,21 @@ static const struct genl_small_ops batadv_netlink_ops[] = {
 	{
 		.cmd = BATADV_CMD_TP_METER,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.doit = batadv_netlink_tp_meter_start,
 		.internal_flags = BATADV_FLAG_NEED_MESH,
 	},
 	{
 		.cmd = BATADV_CMD_TP_METER_CANCEL,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.doit = batadv_netlink_tp_meter_cancel,
 		.internal_flags = BATADV_FLAG_NEED_MESH,
 	},
 	{
 		.cmd = BATADV_CMD_GET_ROUTING_ALGOS,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_algo_dump,
 	},
 	{
@@ -1399,68 +1380,68 @@ static const struct genl_small_ops batadv_netlink_ops[] = {
 	{
 		.cmd = BATADV_CMD_GET_TRANSTABLE_LOCAL,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_tt_local_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_TRANSTABLE_GLOBAL,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_tt_global_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_ORIGINATORS,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_orig_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_NEIGHBORS,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_hardif_neigh_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_GATEWAYS,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_gw_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_BLA_CLAIM,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_bla_claim_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_BLA_BACKBONE,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_bla_backbone_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_DAT_CACHE,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_dat_cache_dump,
 	},
 	{
 		.cmd = BATADV_CMD_GET_MCAST_FLAGS,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.dumpit = batadv_mcast_flags_dump,
 	},
 	{
 		.cmd = BATADV_CMD_SET_MESH,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.doit = batadv_netlink_set_mesh,
 		.internal_flags = BATADV_FLAG_NEED_MESH,
 	},
 	{
 		.cmd = BATADV_CMD_SET_HARDIF,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.doit = batadv_netlink_set_hardif,
 		.internal_flags = BATADV_FLAG_NEED_MESH |
 				  BATADV_FLAG_NEED_HARDIF,
@@ -1476,7 +1457,7 @@ static const struct genl_small_ops batadv_netlink_ops[] = {
 	{
 		.cmd = BATADV_CMD_SET_VLAN,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
-		.flags = GENL_UNS_ADMIN_PERM,
+		.flags = GENL_ADMIN_PERM,
 		.doit = batadv_netlink_set_vlan,
 		.internal_flags = BATADV_FLAG_NEED_MESH |
 				  BATADV_FLAG_NEED_VLAN,
@@ -1493,9 +1474,8 @@ struct genl_family batadv_netlink_family __ro_after_init = {
 	.pre_doit = batadv_pre_doit,
 	.post_doit = batadv_post_doit,
 	.module = THIS_MODULE,
-	.small_ops = batadv_netlink_ops,
-	.n_small_ops = ARRAY_SIZE(batadv_netlink_ops),
-	.resv_start_op = BATADV_CMD_SET_VLAN + 1,
+	.ops = batadv_netlink_ops,
+	.n_ops = ARRAY_SIZE(batadv_netlink_ops),
 	.mcgrps = batadv_netlink_mcgrps,
 	.n_mcgrps = ARRAY_SIZE(batadv_netlink_mcgrps),
 };

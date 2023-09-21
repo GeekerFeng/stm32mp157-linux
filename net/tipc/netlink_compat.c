@@ -39,7 +39,6 @@
 #include "node.h"
 #include "net.h"
 #include <net/genetlink.h>
-#include <linux/string_helpers.h>
 #include <linux/tipc_config.h>
 
 /* The legacy API had an artificial message length limit called
@@ -119,8 +118,7 @@ static void tipc_tlv_init(struct sk_buff *skb, u16 type)
 	skb_put(skb, sizeof(struct tlv_desc));
 }
 
-static __printf(2, 3) int tipc_tlv_sprintf(struct sk_buff *skb,
-					   const char *fmt, ...)
+static int tipc_tlv_sprintf(struct sk_buff *skb, const char *fmt, ...)
 {
 	int n;
 	u16 len;
@@ -174,22 +172,24 @@ static struct sk_buff *tipc_get_err_tlv(char *str)
 	return buf;
 }
 
+static inline bool string_is_valid(char *s, int len)
+{
+	return memchr(s, '\0', len) ? true : false;
+}
+
 static int __tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 				   struct tipc_nl_compat_msg *msg,
 				   struct sk_buff *arg)
 {
-	struct genl_dumpit_info info;
 	int len = 0;
 	int err;
 	struct sk_buff *buf;
 	struct nlmsghdr *nlmsg;
 	struct netlink_callback cb;
-	struct nlattr **attrbuf;
 
 	memset(&cb, 0, sizeof(cb));
 	cb.nlh = (struct nlmsghdr *)arg->data;
 	cb.skb = arg;
-	cb.data = &info;
 
 	buf = nlmsg_new(NLMSG_GOODSIZE, GFP_KERNEL);
 	if (!buf)
@@ -201,37 +201,19 @@ static int __tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 		return -ENOMEM;
 	}
 
-	attrbuf = kcalloc(tipc_genl_family.maxattr + 1,
-			  sizeof(struct nlattr *), GFP_KERNEL);
-	if (!attrbuf) {
-		err = -ENOMEM;
-		goto err_out;
-	}
-
-	info.attrs = attrbuf;
-
-	if (nlmsg_len(cb.nlh) > 0) {
-		err = nlmsg_parse_deprecated(cb.nlh, GENL_HDRLEN, attrbuf,
-					     tipc_genl_family.maxattr,
-					     tipc_genl_family.policy, NULL);
-		if (err)
-			goto err_out;
-	}
 	do {
 		int rem;
 
 		len = (*cmd->dumpit)(buf, &cb);
 
 		nlmsg_for_each_msg(nlmsg, nlmsg_hdr(buf), len, rem) {
-			err = nlmsg_parse_deprecated(nlmsg, GENL_HDRLEN,
-						     attrbuf,
-						     tipc_genl_family.maxattr,
-						     tipc_genl_family.policy,
-						     NULL);
+			struct nlattr **attrs;
+
+			err = tipc_nlmsg_parse(nlmsg, &attrs);
 			if (err)
 				goto err_out;
 
-			err = (*cmd->format)(msg, attrbuf);
+			err = (*cmd->format)(msg, attrs);
 			if (err)
 				goto err_out;
 
@@ -249,7 +231,6 @@ static int __tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 	err = 0;
 
 err_out:
-	kfree(attrbuf);
 	tipc_dump_done(&cb);
 	kfree_skb(buf);
 
@@ -274,9 +255,8 @@ err_out:
 static int tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 				 struct tipc_nl_compat_msg *msg)
 {
-	struct nlmsghdr *nlh;
-	struct sk_buff *arg;
 	int err;
+	struct sk_buff *arg;
 
 	if (msg->req_type && (!msg->req_size ||
 			      !TLV_CHECK_TYPE(msg->req, msg->req_type)))
@@ -304,15 +284,6 @@ static int tipc_nl_compat_dumpit(struct tipc_nl_compat_cmd_dump *cmd,
 		msg->rep = NULL;
 		return -ENOMEM;
 	}
-
-	nlh = nlmsg_put(arg, 0, 0, tipc_genl_family.id, 0, NLM_F_MULTI);
-	if (!nlh) {
-		kfree_skb(arg);
-		kfree_skb(msg->rep);
-		msg->rep = NULL;
-		return -EMSGSIZE;
-	}
-	nlmsg_end(arg, nlh);
 
 	err = __tipc_nl_compat_dumpit(cmd, msg, arg);
 	if (err) {
@@ -441,7 +412,7 @@ static int tipc_nl_compat_bearer_enable(struct tipc_nl_compat_cmd_doit *cmd,
 		return -EINVAL;
 
 	len = min_t(int, len, TIPC_MAX_BEARER_NAME);
-	if (!string_is_terminated(b->name, len))
+	if (!string_is_valid(b->name, len))
 		return -EINVAL;
 
 	if (nla_put_string(skb, TIPC_NLA_BEARER_NAME, b->name))
@@ -482,7 +453,7 @@ static int tipc_nl_compat_bearer_disable(struct tipc_nl_compat_cmd_doit *cmd,
 		return -EINVAL;
 
 	len = min_t(int, len, TIPC_MAX_BEARER_NAME);
-	if (!string_is_terminated(name, len))
+	if (!string_is_valid(name, len))
 		return -EINVAL;
 
 	if (nla_put_string(skb, TIPC_NLA_BEARER_NAME, name))
@@ -580,14 +551,14 @@ static int tipc_nl_compat_link_stat_dump(struct tipc_nl_compat_msg *msg,
 		return -EINVAL;
 
 	len = min_t(int, len, TIPC_MAX_LINK_NAME);
-	if (!string_is_terminated(name, len))
+	if (!string_is_valid(name, len))
 		return -EINVAL;
 
 	if (strcmp(name, nla_data(link[TIPC_NLA_LINK_NAME])) != 0)
 		return 0;
 
 	tipc_tlv_sprintf(msg->rep, "\nLink <%s>\n",
-			 (char *)nla_data(link[TIPC_NLA_LINK_NAME]));
+			 nla_data(link[TIPC_NLA_LINK_NAME]));
 
 	if (link[TIPC_NLA_LINK_BROADCAST]) {
 		__fill_bc_link_stat(msg, prop, stats);
@@ -692,9 +663,9 @@ static int tipc_nl_compat_link_dump(struct tipc_nl_compat_msg *msg,
 	if (err)
 		return err;
 
-	link_info.dest = htonl(nla_get_flag(link[TIPC_NLA_LINK_DEST]));
+	link_info.dest = nla_get_flag(link[TIPC_NLA_LINK_DEST]);
 	link_info.up = htonl(nla_get_flag(link[TIPC_NLA_LINK_UP]));
-	nla_strscpy(link_info.str, link[TIPC_NLA_LINK_NAME],
+	nla_strlcpy(link_info.str, link[TIPC_NLA_LINK_NAME],
 		    TIPC_MAX_LINK_NAME);
 
 	return tipc_add_tlv(msg->rep, TIPC_TLV_LINK_INFO,
@@ -815,7 +786,7 @@ static int tipc_nl_compat_link_set(struct tipc_nl_compat_cmd_doit *cmd,
 		return -EINVAL;
 
 	len = min_t(int, len, TIPC_MAX_LINK_NAME);
-	if (!string_is_terminated(lc->name, len))
+	if (!string_is_valid(lc->name, len))
 		return -EINVAL;
 
 	media = tipc_media_find(lc->name);
@@ -852,7 +823,7 @@ static int tipc_nl_compat_link_reset_stats(struct tipc_nl_compat_cmd_doit *cmd,
 		return -EINVAL;
 
 	len = min_t(int, len, TIPC_MAX_LINK_NAME);
-	if (!string_is_terminated(name, len))
+	if (!string_is_valid(name, len))
 		return -EINVAL;
 
 	if (nla_put_string(skb, TIPC_NLA_LINK_NAME, name))
@@ -876,7 +847,7 @@ static int tipc_nl_compat_name_table_dump_header(struct tipc_nl_compat_msg *msg)
 	};
 
 	ntq = (struct tipc_name_table_query *)TLV_DATA(msg->req);
-	if (TLV_GET_DATA_LEN(msg->req) < (int)sizeof(struct tipc_name_table_query))
+	if (TLV_GET_DATA_LEN(msg->req) < sizeof(struct tipc_name_table_query))
 		return -EINVAL;
 
 	depth = ntohl(ntq->depth);
@@ -1336,7 +1307,7 @@ send:
 	return err;
 }
 
-static const struct genl_small_ops tipc_genl_compat_ops[] = {
+static const struct genl_ops tipc_genl_compat_ops[] = {
 	{
 		.cmd		= TIPC_GENL_CMD,
 		.validate = GENL_DONT_VALIDATE_STRICT | GENL_DONT_VALIDATE_DUMP,
@@ -1351,9 +1322,8 @@ static struct genl_family tipc_genl_compat_family __ro_after_init = {
 	.maxattr	= 0,
 	.netnsok	= true,
 	.module		= THIS_MODULE,
-	.small_ops	= tipc_genl_compat_ops,
-	.n_small_ops	= ARRAY_SIZE(tipc_genl_compat_ops),
-	.resv_start_op	= TIPC_GENL_CMD + 1,
+	.ops		= tipc_genl_compat_ops,
+	.n_ops		= ARRAY_SIZE(tipc_genl_compat_ops),
 };
 
 int __init tipc_netlink_compat_start(void)

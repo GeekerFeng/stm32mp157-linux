@@ -11,10 +11,10 @@
 
 	chosen {
 		stdout-path = &uart5;
-		bootargs = "console=ttyS4,115200 earlycon";
+		bootargs = "console=ttyS4,115200 earlyprintk";
 	};
 
-	memory@40000000 {
+	memory {
 		reg = <0x40000000 0x20000000>;
 	};
 
@@ -43,10 +43,6 @@
 			gpios = <&gpio ASPEED_GPIO(N, 1) GPIO_ACTIVE_LOW>;
 		};
 
-		power_green {
-			gpios = <&gpio ASPEED_GPIO(F, 1) GPIO_ACTIVE_LOW>;
-		};
-
 		id_blue {
 			gpios = <&gpio ASPEED_GPIO(O, 0) GPIO_ACTIVE_LOW>;
 		};
@@ -63,13 +59,13 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		event-checkstop {
+		button_checkstop {
 			label = "checkstop";
 			linux,code = <74>;
 			gpios = <&gpio ASPEED_GPIO(P, 5) GPIO_ACTIVE_LOW>;
 		};
 
-		event-identify {
+		button_identify {
 			label = "identify";
 			linux,code = <152>;
 			gpios = <&gpio ASPEED_GPIO(O, 7) GPIO_ACTIVE_LOW>;
@@ -107,7 +103,10 @@
 
 &mac0 {
 	status = "okay";
+
 	use-ncsi;
+	no-hw-checksum;
+
 	pinctrl-names = "default";
 	pinctrl-0 = <&pinctrl_rmii1_default>;
 };
@@ -232,17 +231,4 @@
 
 &wdt2 {
 	aspeed,alt-boot;
-};
-
-&sdmmc {
-	status = "okay";
-};
-
-&sdhci1 {
-	status = "okay";
-
-	pinctrl-names = "default";
-	pinctrl-0 = <&pinctrl_sd2_default>;
-	cd-inverted;
-	disable-wp;
 };

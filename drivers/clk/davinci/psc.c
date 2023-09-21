@@ -511,6 +511,18 @@ static const struct platform_device_id davinci_psc_id_table[] = {
 	{ .name = "da850-psc0", .driver_data = (kernel_ulong_t)&da850_psc0_init_data },
 	{ .name = "da850-psc1", .driver_data = (kernel_ulong_t)&da850_psc1_init_data },
 #endif
+#ifdef CONFIG_ARCH_DAVINCI_DM355
+	{ .name = "dm355-psc",  .driver_data = (kernel_ulong_t)&dm355_psc_init_data  },
+#endif
+#ifdef CONFIG_ARCH_DAVINCI_DM365
+	{ .name = "dm365-psc",  .driver_data = (kernel_ulong_t)&dm365_psc_init_data  },
+#endif
+#ifdef CONFIG_ARCH_DAVINCI_DM644x
+	{ .name = "dm644x-psc", .driver_data = (kernel_ulong_t)&dm644x_psc_init_data },
+#endif
+#ifdef CONFIG_ARCH_DAVINCI_DM646x
+	{ .name = "dm646x-psc", .driver_data = (kernel_ulong_t)&dm646x_psc_init_data },
+#endif
 	{ }
 };
 
@@ -519,6 +531,7 @@ static int davinci_psc_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	const struct of_device_id *of_id;
 	const struct davinci_psc_init_data *init_data = NULL;
+	struct resource *res;
 	void __iomem *base;
 	int ret;
 
@@ -533,7 +546,8 @@ static int davinci_psc_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
-	base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 

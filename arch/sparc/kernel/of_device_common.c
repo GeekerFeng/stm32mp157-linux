@@ -67,7 +67,6 @@ void of_propagate_archdata(struct platform_device *bus)
 		op->dev.archdata.stc = bus_sd->stc;
 		op->dev.archdata.host_controller = bus_sd->host_controller;
 		op->dev.archdata.numa_node = bus_sd->numa_node;
-		op->dev.dma_ops = bus->dev.dma_ops;
 
 		if (dp->child)
 			of_propagate_archdata(op);
@@ -162,7 +161,7 @@ int of_bus_sbus_match(struct device_node *np)
 		 * don't have some intervening real bus that provides
 		 * ranges based translations.
 		 */
-		if (of_property_present(dp, "ranges"))
+		if (of_find_property(dp, "ranges", NULL) != NULL)
 			break;
 
 		dp = dp->parent;

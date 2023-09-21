@@ -177,7 +177,6 @@ static const struct regmap_config max77620_regmap_config = {
 	.rd_table = &max77620_readable_table,
 	.wr_table = &max77620_writable_table,
 	.volatile_table = &max77620_volatile_table,
-	.use_single_write = true,
 };
 
 static const struct regmap_config max20024_regmap_config = {
@@ -419,11 +418,9 @@ static int max77620_initialise_fps(struct max77620_chip *chip)
 		ret = max77620_config_fps(chip, fps_child);
 		if (ret < 0) {
 			of_node_put(fps_child);
-			of_node_put(fps_np);
 			return ret;
 		}
 	}
-	of_node_put(fps_np);
 
 	config = chip->enable_global_lpm ? MAX77620_ONOFFCNFG2_SLP_LPM_MSK : 0;
 	ret = regmap_update_bits(chip->rmap, MAX77620_REG_ONOFFCNFG2,
@@ -494,9 +491,9 @@ static void max77620_pm_power_off(void)
 			   MAX77620_ONOFFCNFG1_SFT_RST);
 }
 
-static int max77620_probe(struct i2c_client *client)
+static int max77620_probe(struct i2c_client *client,
+			  const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	const struct regmap_config *rmap_config;
 	struct max77620_chip *chip;
 	const struct mfd_cell *mfd_cells;
@@ -510,6 +507,7 @@ static int max77620_probe(struct i2c_client *client)
 
 	i2c_set_clientdata(client, chip);
 	chip->dev = &client->dev;
+	chip->irq_base = -1;
 	chip->chip_irq = client->irq;
 	chip->chip_id = (enum max77620_chip_id)id->driver_data;
 
@@ -547,8 +545,8 @@ static int max77620_probe(struct i2c_client *client)
 
 	max77620_top_irq_chip.irq_drv_data = chip;
 	ret = devm_regmap_add_irq_chip(chip->dev, chip->rmap, client->irq,
-				       IRQF_ONESHOT | IRQF_SHARED, 0,
-				       &max77620_top_irq_chip,
+				       IRQF_ONESHOT | IRQF_SHARED,
+				       chip->irq_base, &max77620_top_irq_chip,
 				       &chip->top_irq_data);
 	if (ret < 0) {
 		dev_err(chip->dev, "Failed to add regmap irq: %d\n", ret);
@@ -576,6 +574,7 @@ static int max77620_probe(struct i2c_client *client)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int max77620_set_fps_period(struct max77620_chip *chip,
 				   int fps_id, int time_period)
 {
@@ -682,6 +681,7 @@ out:
 
 	return 0;
 }
+#endif
 
 static const struct i2c_device_id max77620_id[] = {
 	{"max77620", MAX77620},
@@ -690,15 +690,16 @@ static const struct i2c_device_id max77620_id[] = {
 	{},
 };
 
-static DEFINE_SIMPLE_DEV_PM_OPS(max77620_pm_ops,
-				max77620_i2c_suspend, max77620_i2c_resume);
+static const struct dev_pm_ops max77620_pm_ops = {
+	SET_SYSTEM_SLEEP_PM_OPS(max77620_i2c_suspend, max77620_i2c_resume)
+};
 
 static struct i2c_driver max77620_driver = {
 	.driver = {
 		.name = "max77620",
-		.pm = pm_sleep_ptr(&max77620_pm_ops),
+		.pm = &max77620_pm_ops,
 	},
-	.probe_new = max77620_probe,
+	.probe = max77620_probe,
 	.id_table = max77620_id,
 };
 builtin_i2c_driver(max77620_driver);

@@ -105,7 +105,7 @@ static void navpoint_packet(struct navpoint *navpoint)
 	case 0x19:	/* Module 0, Hello packet */
 		if ((navpoint->data[1] & 0xf0) == 0x10)
 			break;
-		fallthrough;
+		/* FALLTHROUGH */
 	default:
 		dev_warn(navpoint->dev,
 			 "spurious packet: data=0x%02x,0x%02x,...\n",
@@ -315,43 +315,42 @@ static int navpoint_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static int navpoint_suspend(struct device *dev)
+static int __maybe_unused navpoint_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct navpoint *navpoint = platform_get_drvdata(pdev);
 	struct input_dev *input = navpoint->input;
 
 	mutex_lock(&input->mutex);
-	if (input_device_enabled(input))
+	if (input->users)
 		navpoint_down(navpoint);
 	mutex_unlock(&input->mutex);
 
 	return 0;
 }
 
-static int navpoint_resume(struct device *dev)
+static int __maybe_unused navpoint_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct navpoint *navpoint = platform_get_drvdata(pdev);
 	struct input_dev *input = navpoint->input;
 
 	mutex_lock(&input->mutex);
-	if (input_device_enabled(input))
+	if (input->users)
 		navpoint_up(navpoint);
 	mutex_unlock(&input->mutex);
 
 	return 0;
 }
 
-static DEFINE_SIMPLE_DEV_PM_OPS(navpoint_pm_ops,
-				navpoint_suspend, navpoint_resume);
+static SIMPLE_DEV_PM_OPS(navpoint_pm_ops, navpoint_suspend, navpoint_resume);
 
 static struct platform_driver navpoint_driver = {
 	.probe		= navpoint_probe,
 	.remove		= navpoint_remove,
 	.driver = {
 		.name	= "navpoint",
-		.pm	= pm_sleep_ptr(&navpoint_pm_ops),
+		.pm	= &navpoint_pm_ops,
 	},
 };
 

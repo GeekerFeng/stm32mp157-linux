@@ -18,45 +18,14 @@
 #include "kvm_util.h"
 #include "processor.h"
 #include "vmx.h"
-#include "svm_util.h"
 
-#define L2_GUEST_STACK_SIZE 256
+#define VCPU_ID		5
 
-void svm_l2_guest_code(void)
-{
-	GUEST_SYNC(4);
-	/* Exit to L1 */
-	vmcall();
-	GUEST_SYNC(6);
-	/* Done, exit to L1 and never come back.  */
-	vmcall();
-}
-
-static void svm_l1_guest_code(struct svm_test_data *svm)
-{
-	unsigned long l2_guest_stack[L2_GUEST_STACK_SIZE];
-	struct vmcb *vmcb = svm->vmcb;
-
-	GUEST_ASSERT(svm->vmcb_gpa);
-	/* Prepare for L2 execution. */
-	generic_svm_setup(svm, svm_l2_guest_code,
-			  &l2_guest_stack[L2_GUEST_STACK_SIZE]);
-
-	GUEST_SYNC(3);
-	run_guest(vmcb, svm->vmcb_gpa);
-	GUEST_ASSERT(vmcb->control.exit_code == SVM_EXIT_VMMCALL);
-	GUEST_SYNC(5);
-	vmcb->save.rip += 3;
-	run_guest(vmcb, svm->vmcb_gpa);
-	GUEST_ASSERT(vmcb->control.exit_code == SVM_EXIT_VMMCALL);
-	GUEST_SYNC(7);
-}
-
-void vmx_l2_guest_code(void)
+void l2_guest_code(void)
 {
 	GUEST_SYNC(6);
 
-	/* Exit to L1 */
+        /* Exit to L1 */
 	vmcall();
 
 	/* L1 has now set up a shadow VMCS for us.  */
@@ -73,9 +42,10 @@ void vmx_l2_guest_code(void)
 	vmcall();
 }
 
-static void vmx_l1_guest_code(struct vmx_pages *vmx_pages)
+void l1_guest_code(struct vmx_pages *vmx_pages)
 {
-	unsigned long l2_guest_stack[L2_GUEST_STACK_SIZE];
+#define L2_GUEST_STACK_SIZE 64
+        unsigned long l2_guest_stack[L2_GUEST_STACK_SIZE];
 
 	GUEST_ASSERT(vmx_pages->vmcs_gpa);
 	GUEST_ASSERT(prepare_for_vmx_operation(vmx_pages));
@@ -86,7 +56,7 @@ static void vmx_l1_guest_code(struct vmx_pages *vmx_pages)
 	GUEST_SYNC(4);
 	GUEST_ASSERT(vmptrstz() == vmx_pages->vmcs_gpa);
 
-	prepare_vmcs(vmx_pages, vmx_l2_guest_code,
+	prepare_vmcs(vmx_pages, l2_guest_code,
 		     &l2_guest_stack[L2_GUEST_STACK_SIZE]);
 
 	GUEST_SYNC(5);
@@ -136,83 +106,84 @@ static void vmx_l1_guest_code(struct vmx_pages *vmx_pages)
 	GUEST_ASSERT(vmresume());
 }
 
-static void __attribute__((__flatten__)) guest_code(void *arg)
+void guest_code(struct vmx_pages *vmx_pages)
 {
 	GUEST_SYNC(1);
 	GUEST_SYNC(2);
 
-	if (arg) {
-		if (this_cpu_has(X86_FEATURE_SVM))
-			svm_l1_guest_code(arg);
-		else
-			vmx_l1_guest_code(arg);
-	}
+	if (vmx_pages)
+		l1_guest_code(vmx_pages);
 
 	GUEST_DONE();
 }
 
 int main(int argc, char *argv[])
 {
-	vm_vaddr_t nested_gva = 0;
+	vm_vaddr_t vmx_pages_gva = 0;
 
 	struct kvm_regs regs1, regs2;
-	struct kvm_vcpu *vcpu;
 	struct kvm_vm *vm;
+	struct kvm_run *run;
 	struct kvm_x86_state *state;
 	struct ucall uc;
 	int stage;
 
 	/* Create VM */
-	vm = vm_create_with_one_vcpu(&vcpu, guest_code);
+	vm = vm_create_default(VCPU_ID, 0, guest_code);
+	vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
+	run = vcpu_state(vm, VCPU_ID);
 
-	vcpu_regs_get(vcpu, &regs1);
+	vcpu_regs_get(vm, VCPU_ID, &regs1);
 
-	if (kvm_has_cap(KVM_CAP_NESTED_STATE)) {
-		if (kvm_cpu_has(X86_FEATURE_SVM))
-			vcpu_alloc_svm(vm, &nested_gva);
-		else if (kvm_cpu_has(X86_FEATURE_VMX))
-			vcpu_alloc_vmx(vm, &nested_gva);
+	if (kvm_check_cap(KVM_CAP_NESTED_STATE)) {
+		vcpu_alloc_vmx(vm, &vmx_pages_gva);
+		vcpu_args_set(vm, VCPU_ID, 1, vmx_pages_gva);
+	} else {
+		printf("will skip nested state checks\n");
+		vcpu_args_set(vm, VCPU_ID, 1, 0);
 	}
 
-	if (!nested_gva)
-		pr_info("will skip nested state checks\n");
-
-	vcpu_args_set(vcpu, 1, nested_gva);
-
 	for (stage = 1;; stage++) {
-		vcpu_run(vcpu);
-		TEST_ASSERT_KVM_EXIT_REASON(vcpu, KVM_EXIT_IO);
+		_vcpu_run(vm, VCPU_ID);
+		TEST_ASSERT(run->exit_reason == KVM_EXIT_IO,
+			    "Stage %d: unexpected exit reason: %u (%s),\n",
+			    stage, run->exit_reason,
+			    exit_reason_str(run->exit_reason));
 
-		switch (get_ucall(vcpu, &uc)) {
+		switch (get_ucall(vm, VCPU_ID, &uc)) {
 		case UCALL_ABORT:
-			REPORT_GUEST_ASSERT(uc);
+			TEST_ASSERT(false, "%s at %s:%d", (const char *)uc.args[0],
+				    __FILE__, uc.args[1]);
 			/* NOT REACHED */
 		case UCALL_SYNC:
 			break;
 		case UCALL_DONE:
 			goto done;
 		default:
-			TEST_FAIL("Unknown ucall %lu", uc.cmd);
+			TEST_ASSERT(false, "Unknown ucall 0x%x.", uc.cmd);
 		}
 
 		/* UCALL_SYNC is handled here.  */
 		TEST_ASSERT(!strcmp((const char *)uc.args[0], "hello") &&
-			    uc.args[1] == stage, "Stage %d: Unexpected register values vmexit, got %lx",
+			    uc.args[1] == stage, "Unexpected register values vmexit #%lx, got %lx",
 			    stage, (ulong)uc.args[1]);
 
-		state = vcpu_save_state(vcpu);
+		state = vcpu_save_state(vm, VCPU_ID);
 		memset(&regs1, 0, sizeof(regs1));
-		vcpu_regs_get(vcpu, &regs1);
+		vcpu_regs_get(vm, VCPU_ID, &regs1);
 
 		kvm_vm_release(vm);
 
 		/* Restore state in a new VM.  */
-		vcpu = vm_recreate_with_one_vcpu(vm);
-		vcpu_load_state(vcpu, state);
-		kvm_x86_state_cleanup(state);
+		kvm_vm_restart(vm, O_RDWR);
+		vm_vcpu_add(vm, VCPU_ID);
+		vcpu_set_cpuid(vm, VCPU_ID, kvm_get_supported_cpuid());
+		vcpu_load_state(vm, VCPU_ID, state);
+		run = vcpu_state(vm, VCPU_ID);
+		free(state);
 
 		memset(&regs2, 0, sizeof(regs2));
-		vcpu_regs_get(vcpu, &regs2);
+		vcpu_regs_get(vm, VCPU_ID, &regs2);
 		TEST_ASSERT(!memcmp(&regs1, &regs2, sizeof(regs2)),
 			    "Unexpected register values after vcpu_load_state; rdi: %lx rsi: %lx",
 			    (ulong) regs2.rdi, (ulong) regs2.rsi);

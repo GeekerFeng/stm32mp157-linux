@@ -32,6 +32,7 @@
 #include <linux/io.h>
 #include <linux/math64.h>
 #include <linux/module.h>
+#include <linux/rational.h>
 
 #include "clk-regmap.h"
 #include "clk-pll.h"
@@ -241,8 +242,8 @@ static int meson_clk_get_pll_settings(unsigned long rate,
 	return best ? 0 : -EINVAL;
 }
 
-static int meson_clk_pll_determine_rate(struct clk_hw *hw,
-					struct clk_rate_request *req)
+static long meson_clk_pll_round_rate(struct clk_hw *hw, unsigned long rate,
+				     unsigned long *parent_rate)
 {
 	struct clk_regmap *clk = to_clk_regmap(hw);
 	struct meson_clk_pll_data *pll = meson_clk_pll_data(clk);
@@ -250,46 +251,42 @@ static int meson_clk_pll_determine_rate(struct clk_hw *hw,
 	unsigned long round;
 	int ret;
 
-	ret = meson_clk_get_pll_settings(req->rate, req->best_parent_rate,
-					 &m, &n, pll);
+	ret = meson_clk_get_pll_settings(rate, *parent_rate, &m, &n, pll);
 	if (ret)
-		return ret;
+		return meson_clk_pll_recalc_rate(hw, *parent_rate);
 
-	round = __pll_params_to_rate(req->best_parent_rate, m, n, 0, pll);
+	round = __pll_params_to_rate(*parent_rate, m, n, 0, pll);
 
-	if (!MESON_PARM_APPLICABLE(&pll->frac) || req->rate == round) {
-		req->rate = round;
-		return 0;
-	}
+	if (!MESON_PARM_APPLICABLE(&pll->frac) || rate == round)
+		return round;
 
 	/*
 	 * The rate provided by the setting is not an exact match, let's
 	 * try to improve the result using the fractional parameter
 	 */
-	frac = __pll_params_with_frac(req->rate, req->best_parent_rate, m, n, pll);
-	req->rate = __pll_params_to_rate(req->best_parent_rate, m, n, frac, pll);
+	frac = __pll_params_with_frac(rate, *parent_rate, m, n, pll);
 
-	return 0;
+	return __pll_params_to_rate(*parent_rate, m, n, frac, pll);
 }
 
 static int meson_clk_pll_wait_lock(struct clk_hw *hw)
 {
 	struct clk_regmap *clk = to_clk_regmap(hw);
 	struct meson_clk_pll_data *pll = meson_clk_pll_data(clk);
-	int delay = 5000;
+	int delay = 24000000;
 
 	do {
-		/* Is the clock locked now ? Time out after 100ms. */
+		/* Is the clock locked now ? */
 		if (meson_parm_read(clk->map, &pll->l))
 			return 0;
 
-		udelay(20);
-	} while (--delay);
+		delay--;
+	} while (delay > 0);
 
 	return -ETIMEDOUT;
 }
 
-static int meson_clk_pll_init(struct clk_hw *hw)
+static void meson_clk_pll_init(struct clk_hw *hw)
 {
 	struct clk_regmap *clk = to_clk_regmap(hw);
 	struct meson_clk_pll_data *pll = meson_clk_pll_data(clk);
@@ -300,8 +297,6 @@ static int meson_clk_pll_init(struct clk_hw *hw)
 				       pll->init_count);
 		meson_parm_write(clk->map, &pll->rst, 0);
 	}
-
-	return 0;
 }
 
 static int meson_clk_pll_is_enabled(struct clk_hw *hw)
@@ -319,16 +314,12 @@ static int meson_clk_pll_is_enabled(struct clk_hw *hw)
 
 static int meson_clk_pcie_pll_enable(struct clk_hw *hw)
 {
-	int retries = 10;
+	meson_clk_pll_init(hw);
 
-	do {
-		meson_clk_pll_init(hw);
-		if (!meson_clk_pll_wait_lock(hw))
-			return 0;
-		pr_info("Retry enabling PCIe PLL clock\n");
-	} while (--retries);
+	if (meson_clk_pll_wait_lock(hw))
+		return -EIO;
 
-	return -EIO;
+	return 0;
 }
 
 static int meson_clk_pll_enable(struct clk_hw *hw)
@@ -372,14 +363,13 @@ static int meson_clk_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 {
 	struct clk_regmap *clk = to_clk_regmap(hw);
 	struct meson_clk_pll_data *pll = meson_clk_pll_data(clk);
-	unsigned int enabled, m, n, frac = 0;
+	unsigned int enabled, m, n, frac = 0, ret;
 	unsigned long old_rate;
-	int ret;
 
 	if (parent_rate == 0 || rate == 0)
 		return -EINVAL;
 
-	old_rate = clk_hw_get_rate(hw);
+	old_rate = rate;
 
 	ret = meson_clk_get_pll_settings(rate, parent_rate, &m, &n, pll);
 	if (ret)
@@ -401,8 +391,7 @@ static int meson_clk_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 	if (!enabled)
 		return 0;
 
-	ret = meson_clk_pll_enable(hw);
-	if (ret) {
+	if (meson_clk_pll_enable(hw)) {
 		pr_warn("%s: pll did not lock, trying to restore old rate %lu\n",
 			__func__, old_rate);
 		/*
@@ -414,7 +403,7 @@ static int meson_clk_pll_set_rate(struct clk_hw *hw, unsigned long rate,
 		meson_clk_pll_set_rate(hw, old_rate, parent_rate);
 	}
 
-	return ret;
+	return 0;
 }
 
 /*
@@ -426,7 +415,7 @@ static int meson_clk_pll_set_rate(struct clk_hw *hw, unsigned long rate,
  */
 const struct clk_ops meson_clk_pcie_pll_ops = {
 	.recalc_rate	= meson_clk_pll_recalc_rate,
-	.determine_rate	= meson_clk_pll_determine_rate,
+	.round_rate	= meson_clk_pll_round_rate,
 	.is_enabled	= meson_clk_pll_is_enabled,
 	.enable		= meson_clk_pcie_pll_enable,
 	.disable	= meson_clk_pll_disable
@@ -436,7 +425,7 @@ EXPORT_SYMBOL_GPL(meson_clk_pcie_pll_ops);
 const struct clk_ops meson_clk_pll_ops = {
 	.init		= meson_clk_pll_init,
 	.recalc_rate	= meson_clk_pll_recalc_rate,
-	.determine_rate	= meson_clk_pll_determine_rate,
+	.round_rate	= meson_clk_pll_round_rate,
 	.set_rate	= meson_clk_pll_set_rate,
 	.is_enabled	= meson_clk_pll_is_enabled,
 	.enable		= meson_clk_pll_enable,

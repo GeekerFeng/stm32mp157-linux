@@ -72,6 +72,24 @@ static struct ctl_table pty_table[] = {
 	{}
 };
 
+static struct ctl_table pty_kern_table[] = {
+	{
+		.procname	= "pty",
+		.mode		= 0555,
+		.child		= pty_table,
+	},
+	{}
+};
+
+static struct ctl_table pty_root_table[] = {
+	{
+		.procname	= "kernel",
+		.mode		= 0555,
+		.child		= pty_kern_table,
+	},
+	{}
+};
+
 struct pts_mount_opts {
 	int setuid;
 	int setgid;
@@ -603,8 +621,8 @@ void devpts_pty_kill(struct dentry *dentry)
 
 	dentry->d_fsdata = NULL;
 	drop_nlink(dentry->d_inode);
-	d_drop(dentry);
 	fsnotify_unlink(d_inode(dentry->d_parent), dentry);
+	d_drop(dentry);
 	dput(dentry);	/* d_alloc_name() in devpts_pty_new() */
 }
 
@@ -612,7 +630,7 @@ static int __init init_devpts_fs(void)
 {
 	int err = register_filesystem(&devpts_fs_type);
 	if (!err) {
-		register_sysctl("kernel/pty", pty_table);
+		register_sysctl_table(pty_root_table);
 	}
 	return err;
 }

@@ -13,6 +13,7 @@
 #include <linux/init.h>
 #include <linux/device.h>
 #include <linux/fs.h>
+#include <linux/mfd/cros_ec.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/notifier.h>
@@ -48,7 +49,7 @@ struct ec_event {
 	struct list_head node;
 	size_t size;
 	u8 event_type;
-	u8 data[];
+	u8 data[0];
 };
 
 static int ec_get_version(struct cros_ec_dev *ec, char *str, int maxlen)
@@ -284,7 +285,7 @@ static long cros_ec_chardev_ioctl_xcmd(struct cros_ec_dev *ec, void __user *arg)
 	    u_cmd.insize > EC_MAX_MSG_BYTES)
 		return -EINVAL;
 
-	s_cmd = kzalloc(sizeof(*s_cmd) + max(u_cmd.outsize, u_cmd.insize),
+	s_cmd = kmalloc(sizeof(*s_cmd) + max(u_cmd.outsize, u_cmd.insize),
 			GFP_KERNEL);
 	if (!s_cmd)
 		return -ENOMEM;
@@ -326,9 +327,6 @@ static long cros_ec_chardev_ioctl_readmem(struct cros_ec_dev *ec,
 
 	if (copy_from_user(&s_mem, arg, sizeof(s_mem)))
 		return -EFAULT;
-
-	if (s_mem.bytes > sizeof(s_mem.buffer))
-		return -EINVAL;
 
 	num = ec_dev->cmd_readmem(ec_dev, s_mem.offset, s_mem.bytes,
 				  s_mem.buffer);

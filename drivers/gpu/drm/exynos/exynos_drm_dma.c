@@ -4,7 +4,8 @@
 // Author: Inki Dae <inki.dae@samsung.com>
 // Author: Andrzej Hajda <a.hajda@samsung.com>
 
-#include <linux/dma-map-ops.h>
+#include <linux/dma-iommu.h>
+#include <linux/dma-mapping.h>
 #include <linux/iommu.h>
 #include <linux/platform_device.h>
 
@@ -30,6 +31,23 @@
 #define EXYNOS_DEV_ADDR_START	0x20000000
 #define EXYNOS_DEV_ADDR_SIZE	0x40000000
 
+static inline int configure_dma_max_seg_size(struct device *dev)
+{
+	if (!dev->dma_parms)
+		dev->dma_parms = kzalloc(sizeof(*dev->dma_parms), GFP_KERNEL);
+	if (!dev->dma_parms)
+		return -ENOMEM;
+
+	dma_set_max_seg_size(dev, DMA_BIT_MASK(32));
+	return 0;
+}
+
+static inline void clear_dma_max_seg_size(struct device *dev)
+{
+	kfree(dev->dma_parms);
+	dev->dma_parms = NULL;
+}
+
 /*
  * drm_iommu_attach_device- attach device to iommu mapping
  *
@@ -43,7 +61,7 @@ static int drm_iommu_attach_device(struct drm_device *drm_dev,
 				struct device *subdrv_dev, void **dma_priv)
 {
 	struct exynos_drm_private *priv = drm_dev->dev_private;
-	int ret = 0;
+	int ret;
 
 	if (get_dma_ops(priv->dma_dev) != get_dma_ops(subdrv_dev)) {
 		DRM_DEV_ERROR(subdrv_dev, "Device %s lacks support for IOMMU\n",
@@ -51,7 +69,10 @@ static int drm_iommu_attach_device(struct drm_device *drm_dev,
 		return -EINVAL;
 	}
 
-	dma_set_max_seg_size(subdrv_dev, DMA_BIT_MASK(32));
+	ret = configure_dma_max_seg_size(subdrv_dev);
+	if (ret)
+		return ret;
+
 	if (IS_ENABLED(CONFIG_ARM_DMA_USE_IOMMU)) {
 		/*
 		 * Keep the original DMA mapping of the sub-device and
@@ -68,7 +89,10 @@ static int drm_iommu_attach_device(struct drm_device *drm_dev,
 		ret = iommu_attach_device(priv->mapping, subdrv_dev);
 	}
 
-	return ret;
+	if (ret)
+		clear_dma_max_seg_size(subdrv_dev);
+
+	return 0;
 }
 
 /*
@@ -90,6 +114,8 @@ static void drm_iommu_detach_device(struct drm_device *drm_dev,
 		arm_iommu_attach_device(subdrv_dev, *dma_priv);
 	} else if (IS_ENABLED(CONFIG_IOMMU_DMA))
 		iommu_detach_device(priv->mapping, subdrv_dev);
+
+	clear_dma_max_seg_size(subdrv_dev);
 }
 
 int exynos_drm_register_dma(struct drm_device *drm, struct device *dev,
@@ -114,8 +140,6 @@ int exynos_drm_register_dma(struct drm_device *drm, struct device *dev,
 				EXYNOS_DEV_ADDR_START, EXYNOS_DEV_ADDR_SIZE);
 		else if (IS_ENABLED(CONFIG_IOMMU_DMA))
 			mapping = iommu_get_domain_for_dev(priv->dma_dev);
-		else
-			mapping = ERR_PTR(-ENODEV);
 
 		if (IS_ERR(mapping))
 			return PTR_ERR(mapping);

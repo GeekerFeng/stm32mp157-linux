@@ -112,9 +112,9 @@ static int gart_iommu_attach_dev(struct iommu_domain *domain,
 	spin_lock(&gart->dom_lock);
 
 	if (gart->active_domain && gart->active_domain != domain) {
-		ret = -EINVAL;
-	} else if (dev_iommu_priv_get(dev) != domain) {
-		dev_iommu_priv_set(dev, domain);
+		ret = -EBUSY;
+	} else if (dev->archdata.iommu != domain) {
+		dev->archdata.iommu = domain;
 		gart->active_domain = domain;
 		gart->active_devices++;
 	}
@@ -124,15 +124,15 @@ static int gart_iommu_attach_dev(struct iommu_domain *domain,
 	return ret;
 }
 
-static void gart_iommu_set_platform_dma(struct device *dev)
+static void gart_iommu_detach_dev(struct iommu_domain *domain,
+				  struct device *dev)
 {
-	struct iommu_domain *domain = iommu_get_domain_for_dev(dev);
 	struct gart_device *gart = gart_handle;
 
 	spin_lock(&gart->dom_lock);
 
-	if (dev_iommu_priv_get(dev) == domain) {
-		dev_iommu_priv_set(dev, NULL);
+	if (dev->archdata.iommu == domain) {
+		dev->archdata.iommu = NULL;
 
 		if (--gart->active_devices == 0)
 			gart->active_domain = NULL;
@@ -178,7 +178,7 @@ static inline int __gart_iommu_map(struct gart_device *gart, unsigned long iova,
 }
 
 static int gart_iommu_map(struct iommu_domain *domain, unsigned long iova,
-			  phys_addr_t pa, size_t bytes, int prot, gfp_t gfp)
+			  phys_addr_t pa, size_t bytes, int prot)
 {
 	struct gart_device *gart = gart_handle;
 	int ret;
@@ -238,12 +238,33 @@ static phys_addr_t gart_iommu_iova_to_phys(struct iommu_domain *domain,
 	return pte & GART_PAGE_MASK;
 }
 
-static struct iommu_device *gart_iommu_probe_device(struct device *dev)
+static bool gart_iommu_capable(enum iommu_cap cap)
 {
-	if (!dev_iommu_fwspec_get(dev))
-		return ERR_PTR(-ENODEV);
+	return false;
+}
 
-	return &gart_handle->iommu;
+static int gart_iommu_add_device(struct device *dev)
+{
+	struct iommu_group *group;
+
+	if (!dev->iommu_fwspec)
+		return -ENODEV;
+
+	group = iommu_group_get_for_dev(dev);
+	if (IS_ERR(group))
+		return PTR_ERR(group);
+
+	iommu_group_put(group);
+
+	iommu_device_link(&gart_handle->iommu, dev);
+
+	return 0;
+}
+
+static void gart_iommu_remove_device(struct device *dev)
+{
+	iommu_group_remove_device(dev);
+	iommu_device_unlink(&gart_handle->iommu, dev);
 }
 
 static int gart_iommu_of_xlate(struct device *dev,
@@ -252,8 +273,7 @@ static int gart_iommu_of_xlate(struct device *dev,
 	return 0;
 }
 
-static void gart_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
-				size_t size)
+static void gart_iommu_sync_map(struct iommu_domain *domain)
 {
 	FLUSH_GART_REGS(gart_handle);
 }
@@ -261,27 +281,25 @@ static void gart_iommu_sync_map(struct iommu_domain *domain, unsigned long iova,
 static void gart_iommu_sync(struct iommu_domain *domain,
 			    struct iommu_iotlb_gather *gather)
 {
-	size_t length = gather->end - gather->start + 1;
-
-	gart_iommu_sync_map(domain, gather->start, length);
+	gart_iommu_sync_map(domain);
 }
 
 static const struct iommu_ops gart_iommu_ops = {
+	.capable	= gart_iommu_capable,
 	.domain_alloc	= gart_iommu_domain_alloc,
-	.probe_device	= gart_iommu_probe_device,
+	.domain_free	= gart_iommu_domain_free,
+	.attach_dev	= gart_iommu_attach_dev,
+	.detach_dev	= gart_iommu_detach_dev,
+	.add_device	= gart_iommu_add_device,
+	.remove_device	= gart_iommu_remove_device,
 	.device_group	= generic_device_group,
-	.set_platform_dma_ops = gart_iommu_set_platform_dma,
+	.map		= gart_iommu_map,
+	.unmap		= gart_iommu_unmap,
+	.iova_to_phys	= gart_iommu_iova_to_phys,
 	.pgsize_bitmap	= GART_IOMMU_PGSIZES,
 	.of_xlate	= gart_iommu_of_xlate,
-	.default_domain_ops = &(const struct iommu_domain_ops) {
-		.attach_dev	= gart_iommu_attach_dev,
-		.map		= gart_iommu_map,
-		.unmap		= gart_iommu_unmap,
-		.iova_to_phys	= gart_iommu_iova_to_phys,
-		.iotlb_sync_map	= gart_iommu_sync_map,
-		.iotlb_sync	= gart_iommu_sync,
-		.free		= gart_iommu_domain_free,
-	}
+	.iotlb_sync_map	= gart_iommu_sync_map,
+	.iotlb_sync	= gart_iommu_sync,
 };
 
 int tegra_gart_suspend(struct gart_device *gart)
@@ -344,7 +362,10 @@ struct gart_device *tegra_gart_probe(struct device *dev, struct tegra_mc *mc)
 	if (err)
 		goto free_gart;
 
-	err = iommu_device_register(&gart->iommu, &gart_iommu_ops, dev);
+	iommu_device_set_ops(&gart->iommu, &gart_iommu_ops);
+	iommu_device_set_fwnode(&gart->iommu, dev->fwnode);
+
+	err = iommu_device_register(&gart->iommu);
 	if (err)
 		goto remove_sysfs;
 

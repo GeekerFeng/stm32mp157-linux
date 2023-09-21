@@ -4,7 +4,7 @@
  *
  * Copyright 2018 Qtechnology A/S
  *
- * Ricardo Ribalda <ribalda@kernel.org>
+ * Ricardo Ribalda <ricardo.ribalda@gmail.com>
  */
 #include <linux/clk.h>
 #include <linux/delay.h>
@@ -47,7 +47,6 @@ struct imx214 {
 	struct v4l2_ctrl *pixel_rate;
 	struct v4l2_ctrl *link_freq;
 	struct v4l2_ctrl *exposure;
-	struct v4l2_ctrl *unit_size;
 
 	struct regulator_bulk_data	supplies[IMX214_NUM_SUPPLIES];
 
@@ -474,7 +473,7 @@ static int __maybe_unused imx214_power_off(struct device *dev)
 }
 
 static int imx214_enum_mbus_code(struct v4l2_subdev *sd,
-				 struct v4l2_subdev_state *sd_state,
+				 struct v4l2_subdev_pad_config *cfg,
 				 struct v4l2_subdev_mbus_code_enum *code)
 {
 	if (code->index > 0)
@@ -486,7 +485,7 @@ static int imx214_enum_mbus_code(struct v4l2_subdev *sd,
 }
 
 static int imx214_enum_frame_size(struct v4l2_subdev *subdev,
-				  struct v4l2_subdev_state *sd_state,
+				  struct v4l2_subdev_pad_config *cfg,
 				  struct v4l2_subdev_frame_size_enum *fse)
 {
 	if (fse->code != IMX214_MBUS_CODE)
@@ -534,13 +533,13 @@ static const struct v4l2_subdev_core_ops imx214_core_ops = {
 
 static struct v4l2_mbus_framefmt *
 __imx214_get_pad_format(struct imx214 *imx214,
-			struct v4l2_subdev_state *sd_state,
+			struct v4l2_subdev_pad_config *cfg,
 			unsigned int pad,
 			enum v4l2_subdev_format_whence which)
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_get_try_format(&imx214->sd, sd_state, pad);
+		return v4l2_subdev_get_try_format(&imx214->sd, cfg, pad);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &imx214->fmt;
 	default:
@@ -549,14 +548,13 @@ __imx214_get_pad_format(struct imx214 *imx214,
 }
 
 static int imx214_get_format(struct v4l2_subdev *sd,
-			     struct v4l2_subdev_state *sd_state,
+			     struct v4l2_subdev_pad_config *cfg,
 			     struct v4l2_subdev_format *format)
 {
 	struct imx214 *imx214 = to_imx214(sd);
 
 	mutex_lock(&imx214->mutex);
-	format->format = *__imx214_get_pad_format(imx214, sd_state,
-						  format->pad,
+	format->format = *__imx214_get_pad_format(imx214, cfg, format->pad,
 						  format->which);
 	mutex_unlock(&imx214->mutex);
 
@@ -564,13 +562,12 @@ static int imx214_get_format(struct v4l2_subdev *sd,
 }
 
 static struct v4l2_rect *
-__imx214_get_pad_crop(struct imx214 *imx214,
-		      struct v4l2_subdev_state *sd_state,
+__imx214_get_pad_crop(struct imx214 *imx214, struct v4l2_subdev_pad_config *cfg,
 		      unsigned int pad, enum v4l2_subdev_format_whence which)
 {
 	switch (which) {
 	case V4L2_SUBDEV_FORMAT_TRY:
-		return v4l2_subdev_get_try_crop(&imx214->sd, sd_state, pad);
+		return v4l2_subdev_get_try_crop(&imx214->sd, cfg, pad);
 	case V4L2_SUBDEV_FORMAT_ACTIVE:
 		return &imx214->crop;
 	default:
@@ -579,7 +576,7 @@ __imx214_get_pad_crop(struct imx214 *imx214,
 }
 
 static int imx214_set_format(struct v4l2_subdev *sd,
-			     struct v4l2_subdev_state *sd_state,
+			     struct v4l2_subdev_pad_config *cfg,
 			     struct v4l2_subdev_format *format)
 {
 	struct imx214 *imx214 = to_imx214(sd);
@@ -589,8 +586,7 @@ static int imx214_set_format(struct v4l2_subdev *sd,
 
 	mutex_lock(&imx214->mutex);
 
-	__crop = __imx214_get_pad_crop(imx214, sd_state, format->pad,
-				       format->which);
+	__crop = __imx214_get_pad_crop(imx214, cfg, format->pad, format->which);
 
 	mode = v4l2_find_nearest_size(imx214_modes,
 				      ARRAY_SIZE(imx214_modes), width, height,
@@ -600,7 +596,7 @@ static int imx214_set_format(struct v4l2_subdev *sd,
 	__crop->width = mode->width;
 	__crop->height = mode->height;
 
-	__format = __imx214_get_pad_format(imx214, sd_state, format->pad,
+	__format = __imx214_get_pad_format(imx214, cfg, format->pad,
 					   format->which);
 	__format->width = __crop->width;
 	__format->height = __crop->height;
@@ -620,7 +616,7 @@ static int imx214_set_format(struct v4l2_subdev *sd,
 }
 
 static int imx214_get_selection(struct v4l2_subdev *sd,
-				struct v4l2_subdev_state *sd_state,
+				struct v4l2_subdev_pad_config *cfg,
 				struct v4l2_subdev_selection *sel)
 {
 	struct imx214 *imx214 = to_imx214(sd);
@@ -629,22 +625,22 @@ static int imx214_get_selection(struct v4l2_subdev *sd,
 		return -EINVAL;
 
 	mutex_lock(&imx214->mutex);
-	sel->r = *__imx214_get_pad_crop(imx214, sd_state, sel->pad,
+	sel->r = *__imx214_get_pad_crop(imx214, cfg, sel->pad,
 					sel->which);
 	mutex_unlock(&imx214->mutex);
 	return 0;
 }
 
 static int imx214_entity_init_cfg(struct v4l2_subdev *subdev,
-				  struct v4l2_subdev_state *sd_state)
+				  struct v4l2_subdev_pad_config *cfg)
 {
 	struct v4l2_subdev_format fmt = { };
 
-	fmt.which = sd_state ? V4L2_SUBDEV_FORMAT_TRY : V4L2_SUBDEV_FORMAT_ACTIVE;
+	fmt.which = cfg ? V4L2_SUBDEV_FORMAT_TRY : V4L2_SUBDEV_FORMAT_ACTIVE;
 	fmt.format.width = imx214_modes[0].width;
 	fmt.format.height = imx214_modes[0].height;
 
-	imx214_set_format(subdev, sd_state, &fmt);
+	imx214_set_format(subdev, cfg, &fmt);
 
 	return 0;
 }
@@ -779,15 +775,17 @@ static int imx214_s_stream(struct v4l2_subdev *subdev, int enable)
 		return 0;
 
 	if (enable) {
-		ret = pm_runtime_resume_and_get(imx214->dev);
-		if (ret < 0)
+		ret = pm_runtime_get_sync(imx214->dev);
+		if (ret < 0) {
+			pm_runtime_put_noidle(imx214->dev);
 			return ret;
+		}
 
 		ret = imx214_start_streaming(imx214);
 		if (ret < 0)
 			goto err_rpm_put;
 	} else {
-		ret = imx214_stop_streaming(imx214);
+		ret = imx214_start_streaming(imx214);
 		if (ret < 0)
 			goto err_rpm_put;
 		pm_runtime_put(imx214->dev);
@@ -804,6 +802,7 @@ err_rpm_put:
 static int imx214_g_frame_interval(struct v4l2_subdev *subdev,
 				   struct v4l2_subdev_frame_interval *fival)
 {
+	fival->pad = 0;
 	fival->interval.numerator = 1;
 	fival->interval.denominator = IMX214_FPS;
 
@@ -811,7 +810,7 @@ static int imx214_g_frame_interval(struct v4l2_subdev *subdev,
 }
 
 static int imx214_enum_frame_interval(struct v4l2_subdev *subdev,
-				struct v4l2_subdev_state *sd_state,
+				struct v4l2_subdev_pad_config *cfg,
 				struct v4l2_subdev_frame_interval_enum *fie)
 {
 	const struct imx214_mode *mode;
@@ -949,10 +948,6 @@ static int imx214_probe(struct i2c_client *client)
 	static const s64 link_freq[] = {
 		IMX214_DEFAULT_LINK_FREQ,
 	};
-	static const struct v4l2_area unit_size = {
-		.width = 1120,
-		.height = 1120,
-	};
 	int ret;
 
 	ret = imx214_parse_fwnode(dev);
@@ -1034,10 +1029,6 @@ static int imx214_probe(struct i2c_client *client)
 					     V4L2_CID_EXPOSURE,
 					     0, 3184, 1, 0x0c70);
 
-	imx214->unit_size = v4l2_ctrl_new_std_compound(&imx214->ctrls,
-				NULL,
-				V4L2_CID_UNIT_CELL_SIZE,
-				v4l2_ctrl_ptr_create((void *)&unit_size));
 	ret = imx214->ctrls.error;
 	if (ret) {
 		dev_err(&client->dev, "%s control init failed (%d)\n",
@@ -1062,7 +1053,7 @@ static int imx214_probe(struct i2c_client *client)
 
 	imx214_entity_init_cfg(&imx214->sd, NULL);
 
-	ret = v4l2_async_register_subdev_sensor(&imx214->sd);
+	ret = v4l2_async_register_subdev_sensor_common(&imx214->sd);
 	if (ret < 0) {
 		dev_err(dev, "could not register v4l2 device\n");
 		goto free_entity;
@@ -1080,7 +1071,7 @@ free_ctrl:
 	return ret;
 }
 
-static void imx214_remove(struct i2c_client *client)
+static int imx214_remove(struct i2c_client *client)
 {
 	struct v4l2_subdev *sd = i2c_get_clientdata(client);
 	struct imx214 *imx214 = to_imx214(sd);
@@ -1093,6 +1084,8 @@ static void imx214_remove(struct i2c_client *client)
 	pm_runtime_set_suspended(&client->dev);
 
 	mutex_destroy(&imx214->mutex);
+
+	return 0;
 }
 
 static const struct of_device_id imx214_of_match[] = {
@@ -1119,5 +1112,5 @@ static struct i2c_driver imx214_i2c_driver = {
 module_i2c_driver(imx214_i2c_driver);
 
 MODULE_DESCRIPTION("Sony IMX214 Camera driver");
-MODULE_AUTHOR("Ricardo Ribalda <ribalda@kernel.org>");
+MODULE_AUTHOR("Ricardo Ribalda <ricardo.ribalda@gmail.com>");
 MODULE_LICENSE("GPL v2");

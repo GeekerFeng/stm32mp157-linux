@@ -35,6 +35,9 @@
 #define UNIPHIER_I2C_NOISE	0x1c	/* noise filter control */
 #define UNIPHIER_I2C_SETUP	0x20	/* setup time control */
 
+#define UNIPHIER_I2C_DEFAULT_SPEED	100000
+#define UNIPHIER_I2C_MAX_SPEED		400000
+
 struct uniphier_i2c_priv {
 	struct completion comp;
 	struct i2c_adapter adap;
@@ -324,13 +327,15 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 		return PTR_ERR(priv->membase);
 
 	irq = platform_get_irq(pdev, 0);
-	if (irq < 0)
+	if (irq < 0) {
+		dev_err(dev, "failed to get IRQ number\n");
 		return irq;
+	}
 
 	if (of_property_read_u32(dev->of_node, "clock-frequency", &bus_speed))
-		bus_speed = I2C_MAX_STANDARD_MODE_FREQ;
+		bus_speed = UNIPHIER_I2C_DEFAULT_SPEED;
 
-	if (!bus_speed || bus_speed > I2C_MAX_FAST_MODE_FREQ) {
+	if (!bus_speed || bus_speed > UNIPHIER_I2C_MAX_SPEED) {
 		dev_err(dev, "invalid clock-frequency %d\n", bus_speed);
 		return -EINVAL;
 	}
@@ -358,7 +363,7 @@ static int uniphier_i2c_probe(struct platform_device *pdev)
 	priv->adap.algo = &uniphier_i2c_algo;
 	priv->adap.dev.parent = dev;
 	priv->adap.dev.of_node = dev->of_node;
-	strscpy(priv->adap.name, "UniPhier I2C", sizeof(priv->adap.name));
+	strlcpy(priv->adap.name, "UniPhier I2C", sizeof(priv->adap.name));
 	priv->adap.bus_recovery_info = &uniphier_i2c_bus_recovery_info;
 	i2c_set_adapdata(&priv->adap, priv);
 	platform_set_drvdata(pdev, priv);

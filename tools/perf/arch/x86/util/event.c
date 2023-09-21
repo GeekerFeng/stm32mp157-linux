@@ -2,15 +2,13 @@
 #include <linux/types.h>
 #include <linux/string.h>
 #include <linux/zalloc.h>
-#include <stdlib.h>
 
-#include "../../../util/event.h"
-#include "../../../util/synthetic-events.h"
-#include "../../../util/machine.h"
-#include "../../../util/tool.h"
-#include "../../../util/map.h"
-#include "../../../util/debug.h"
-#include "util/sample.h"
+#include "../../util/event.h"
+#include "../../util/synthetic-events.h"
+#include "../../util/machine.h"
+#include "../../util/tool.h"
+#include "../../util/map.h"
+#include "../../util/debug.h"
 
 #if defined(__x86_64__)
 
@@ -19,8 +17,9 @@ int perf_event__synthesize_extra_kmaps(struct perf_tool *tool,
 				       struct machine *machine)
 {
 	int rc = 0;
-	struct map_rb_node *pos;
-	struct maps *kmaps = machine__kernel_maps(machine);
+	struct map *pos;
+	struct map_groups *kmaps = &machine->kmaps;
+	struct maps *maps = &kmaps->maps;
 	union perf_event *event = zalloc(sizeof(event->mmap) +
 					 machine->id_hdr_size);
 
@@ -30,15 +29,14 @@ int perf_event__synthesize_extra_kmaps(struct perf_tool *tool,
 		return -1;
 	}
 
-	maps__for_each_entry(kmaps, pos) {
+	for (pos = maps__first(maps); pos; pos = map__next(pos)) {
 		struct kmap *kmap;
 		size_t size;
-		struct map *map = pos->map;
 
-		if (!__map__is_extra_kernel_map(map))
+		if (!__map__is_extra_kernel_map(pos))
 			continue;
 
-		kmap = map__kmap(map);
+		kmap = map__kmap(pos);
 
 		size = sizeof(event->mmap) - sizeof(event->mmap.filename) +
 		       PERF_ALIGN(strlen(kmap->name) + 1, sizeof(u64)) +
@@ -59,9 +57,9 @@ int perf_event__synthesize_extra_kmaps(struct perf_tool *tool,
 
 		event->mmap.header.size = size;
 
-		event->mmap.start = map__start(map);
-		event->mmap.len   = map__size(map);
-		event->mmap.pgoff = map__pgoff(map);
+		event->mmap.start = pos->start;
+		event->mmap.len   = pos->end - pos->start;
+		event->mmap.pgoff = pos->pgoff;
 		event->mmap.pid   = machine->pid;
 
 		strlcpy(event->mmap.filename, kmap->name, PATH_MAX);
@@ -78,49 +76,3 @@ int perf_event__synthesize_extra_kmaps(struct perf_tool *tool,
 }
 
 #endif
-
-void arch_perf_parse_sample_weight(struct perf_sample *data,
-				   const __u64 *array, u64 type)
-{
-	union perf_sample_weight weight;
-
-	weight.full = *array;
-	if (type & PERF_SAMPLE_WEIGHT)
-		data->weight = weight.full;
-	else {
-		data->weight = weight.var1_dw;
-		data->ins_lat = weight.var2_w;
-		data->retire_lat = weight.var3_w;
-	}
-}
-
-void arch_perf_synthesize_sample_weight(const struct perf_sample *data,
-					__u64 *array, u64 type)
-{
-	*array = data->weight;
-
-	if (type & PERF_SAMPLE_WEIGHT_STRUCT) {
-		*array &= 0xffffffff;
-		*array |= ((u64)data->ins_lat << 32);
-		*array |= ((u64)data->retire_lat << 48);
-	}
-}
-
-const char *arch_perf_header_entry(const char *se_header)
-{
-	if (!strcmp(se_header, "Local Pipeline Stage Cycle"))
-		return "Local Retire Latency";
-	else if (!strcmp(se_header, "Pipeline Stage Cycle"))
-		return "Retire Latency";
-
-	return se_header;
-}
-
-int arch_support_sort_key(const char *sort_key)
-{
-	if (!strcmp(sort_key, "p_stage_cyc"))
-		return 1;
-	if (!strcmp(sort_key, "local_p_stage_cyc"))
-		return 1;
-	return 0;
-}

@@ -11,7 +11,9 @@
 #include <sound/hda_i915.h>
 #include <sound/hda_register.h>
 
-#define IS_HSW_CONTROLLER(pci) (((pci)->device == 0x0a0c) || \
+static struct completion bind_complete;
+
+#define CONTROLLER_IN_GPU(pci) (((pci)->device == 0x0a0c) || \
 				((pci)->device == 0x0c0c) || \
 				((pci)->device == 0x0d0c) || \
 				((pci)->device == 0x160c))
@@ -39,7 +41,7 @@ void snd_hdac_i915_set_bclk(struct hdac_bus *bus)
 
 	if (!acomp || !acomp->ops || !acomp->ops->get_cdclk_freq)
 		return; /* only for i915 binding */
-	if (!IS_HSW_CONTROLLER(pci))
+	if (!CONTROLLER_IN_GPU(pci))
 		return; /* only HSW/BDW */
 
 	cdclk_freq = acomp->ops->get_cdclk_freq(acomp->dev);
@@ -71,67 +73,37 @@ void snd_hdac_i915_set_bclk(struct hdac_bus *bus)
 }
 EXPORT_SYMBOL_GPL(snd_hdac_i915_set_bclk);
 
-/* returns true if the devices can be connected for audio */
-static bool connectivity_check(struct pci_dev *i915, struct pci_dev *hdac)
-{
-	struct pci_bus *bus_a = i915->bus, *bus_b = hdac->bus;
-
-	/* directly connected on the same bus */
-	if (bus_a == bus_b)
-		return true;
-
-	/*
-	 * on i915 discrete GPUs with embedded HDA audio, the two
-	 * devices are connected via 2nd level PCI bridge
-	 */
-	bus_a = bus_a->parent;
-	bus_b = bus_b->parent;
-	if (!bus_a || !bus_b)
-		return false;
-	bus_a = bus_a->parent;
-	bus_b = bus_b->parent;
-	if (bus_a && bus_a == bus_b)
-		return true;
-
-	return false;
-}
-
 static int i915_component_master_match(struct device *dev, int subcomponent,
 				       void *data)
 {
-	struct pci_dev *hdac_pci, *i915_pci;
-	struct hdac_bus *bus = data;
+	return !strcmp(dev->driver->name, "i915") &&
+	       subcomponent == I915_COMPONENT_AUDIO;
+}
 
-	if (!dev_is_pci(dev))
-		return 0;
+/* check whether intel graphics is present */
+static bool i915_gfx_present(void)
+{
+	static const struct pci_device_id ids[] = {
+		{ PCI_DEVICE(PCI_VENDOR_ID_INTEL, PCI_ANY_ID),
+		  .class = PCI_BASE_CLASS_DISPLAY << 16,
+		  .class_mask = 0xff << 16 },
+		{}
+	};
+	return pci_dev_present(ids);
+}
 
-	hdac_pci = to_pci_dev(bus->dev);
-	i915_pci = to_pci_dev(dev);
-
-	if (!strcmp(dev->driver->name, "i915") &&
-	    subcomponent == I915_COMPONENT_AUDIO &&
-	    connectivity_check(i915_pci, hdac_pci))
-		return 1;
-
+static int i915_master_bind(struct device *dev,
+			    struct drm_audio_component *acomp)
+{
+	complete_all(&bind_complete);
+	/* clear audio_ops here as it was needed only for completion call */
+	acomp->audio_ops = NULL;
 	return 0;
 }
 
-/* check whether Intel graphics is present and reachable */
-static int i915_gfx_present(struct pci_dev *hdac_pci)
-{
-	struct pci_dev *display_dev = NULL;
-
-	for_each_pci_dev(display_dev) {
-		if (display_dev->vendor == PCI_VENDOR_ID_INTEL &&
-		    (display_dev->class >> 16) == PCI_BASE_CLASS_DISPLAY &&
-		    connectivity_check(display_dev, hdac_pci)) {
-			pci_dev_put(display_dev);
-			return true;
-		}
-	}
-
-	return false;
-}
+static const struct drm_audio_component_audio_ops i915_init_ops = {
+	.master_bind = i915_master_bind
+};
 
 /**
  * snd_hdac_i915_init - Initialize i915 audio component
@@ -150,10 +122,12 @@ int snd_hdac_i915_init(struct hdac_bus *bus)
 	struct drm_audio_component *acomp;
 	int err;
 
-	if (!i915_gfx_present(to_pci_dev(bus->dev)))
+	if (!i915_gfx_present())
 		return -ENODEV;
 
-	err = snd_hdac_acomp_init(bus, NULL,
+	init_completion(&bind_complete);
+
+	err = snd_hdac_acomp_init(bus, &i915_init_ops,
 				  i915_component_master_match,
 				  sizeof(struct i915_audio_component) - sizeof(*acomp));
 	if (err < 0)
@@ -165,8 +139,8 @@ int snd_hdac_i915_init(struct hdac_bus *bus)
 		if (!IS_ENABLED(CONFIG_MODULES) ||
 		    !request_module("i915")) {
 			/* 60s timeout */
-			wait_for_completion_killable_timeout(&acomp->master_bind_complete,
-							     msecs_to_jiffies(60 * 1000));
+			wait_for_completion_timeout(&bind_complete,
+						   msecs_to_jiffies(60 * 1000));
 		}
 	}
 	if (!acomp->ops) {

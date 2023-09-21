@@ -23,6 +23,10 @@
 #include <asm/unaligned.h>
 #include <asm/early_ioremap.h>
 
+/* We don't use IO slowdowns on the ia64, but.. */
+#define __SLOW_DOWN_IO	do { } while (0)
+#define SLOW_DOWN_IO	do { } while (0)
+
 #define __IA64_UNCACHED_OFFSET	RGN_BASE(RGN_UNCACHED)
 
 /*
@@ -91,6 +95,14 @@ phys_to_virt (unsigned long address)
 extern u64 kern_mem_attribute (unsigned long phys_addr, unsigned long size);
 extern int valid_phys_addr_range (phys_addr_t addr, size_t count); /* efi.c */
 extern int valid_mmap_phys_addr_range (unsigned long pfn, size_t count);
+
+/*
+ * The following two macros are deprecated and scheduled for removal.
+ * Please use the PCI-DMA interface defined in <asm/pci.h> instead.
+ */
+#define bus_to_virt	phys_to_virt
+#define virt_to_bus	virt_to_phys
+#define page_to_bus	page_to_phys
 
 # endif /* KERNEL */
 
@@ -244,15 +256,16 @@ static inline void outsl(unsigned long port, const void *src,
 # ifdef __KERNEL__
 
 extern void __iomem * ioremap(unsigned long offset, unsigned long size);
-extern void __iomem * ioremap_uc(unsigned long offset, unsigned long size);
+extern void __iomem * ioremap_nocache (unsigned long offset, unsigned long size);
 extern void iounmap (volatile void __iomem *addr);
 static inline void __iomem * ioremap_cache (unsigned long phys_addr, unsigned long size)
 {
 	return ioremap(phys_addr, size);
 }
 #define ioremap ioremap
+#define ioremap_nocache ioremap_nocache
 #define ioremap_cache ioremap_cache
-#define ioremap_uc ioremap_uc
+#define ioremap_uc ioremap_nocache
 #define iounmap iounmap
 
 /*
@@ -265,6 +278,7 @@ extern void memset_io(volatile void __iomem *s, int c, long n);
 #define memcpy_fromio memcpy_fromio
 #define memcpy_toio memcpy_toio
 #define memset_io memset_io
+#define xlate_dev_kmem_ptr xlate_dev_kmem_ptr
 #define xlate_dev_mem_ptr xlate_dev_mem_ptr
 #include <asm-generic/io.h>
 #undef PCI_IOBASE

@@ -5,8 +5,8 @@
  * Copyright (C) 2003, 2004 Colin Leroy, Rasmus Rohde, Benjamin Herrenschmidt
  *
  * Documentation from 115254175ADT7467_pra.pdf and 3686221171167ADT7460_b.pdf
- * https://www.onsemi.com/PowerSolutions/product.do?id=ADT7467
- * https://www.onsemi.com/PowerSolutions/product.do?id=ADT7460
+ * http://www.onsemi.com/PowerSolutions/product.do?id=ADT7467
+ * http://www.onsemi.com/PowerSolutions/product.do?id=ADT7460
  *
  */
 
@@ -27,6 +27,7 @@
 #include <linux/freezer.h>
 #include <linux/of_platform.h>
 
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <asm/io.h>
 #include <asm/sections.h>
@@ -464,9 +465,9 @@ static void thermostat_remove_files(struct thermostat *th)
 
 }
 
-static int probe_thermostat(struct i2c_client *client)
+static int probe_thermostat(struct i2c_client *client,
+			    const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct device_node *np = client->dev.of_node;
 	struct thermostat* th;
 	const __be32 *prop;
@@ -483,7 +484,7 @@ static int probe_thermostat(struct i2c_client *client)
 	if (vers != 1)
 		return -ENXIO;
 
-	if (of_property_present(np, "hwsensor-location")) {
+	if (of_get_property(np, "hwsensor-location", NULL)) {
 		for (i = 0; i < 3; i++) {
 			sensor_location[i] = of_get_property(np,
 					"hwsensor-location", NULL) + offset;
@@ -563,7 +564,7 @@ static int probe_thermostat(struct i2c_client *client)
 	return 0;
 }
 
-static void remove_thermostat(struct i2c_client *client)
+static int remove_thermostat(struct i2c_client *client)
 {
 	struct thermostat *th = i2c_get_clientdata(client);
 	int i;
@@ -585,6 +586,8 @@ static void remove_thermostat(struct i2c_client *client)
 	write_both_fan_speed(th, -1);
 
 	kfree(th);
+
+	return 0;
 }
 
 static const struct i2c_device_id therm_adt746x_id[] = {
@@ -598,7 +601,7 @@ static struct i2c_driver thermostat_driver = {
 	.driver = {
 		.name	= "therm_adt746x",
 	},
-	.probe_new = probe_thermostat,
+	.probe = probe_thermostat,
 	.remove = remove_thermostat,
 	.id_table = therm_adt746x_id,
 };

@@ -156,7 +156,7 @@ max6621_is_visible(const void *data, enum hwmon_sensor_types type, u32 attr,
 		default:
 			break;
 		}
-		break;
+
 	default:
 		break;
 	}
@@ -449,7 +449,7 @@ static const struct regmap_config max6621_regmap_config = {
 	.num_reg_defaults = ARRAY_SIZE(max6621_regmap_default),
 };
 
-static const struct hwmon_channel_info * const max6621_info[] = {
+static const struct hwmon_channel_info *max6621_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_REGISTER_TZ),
 	HWMON_CHANNEL_INFO(temp,
@@ -477,7 +477,8 @@ static const struct hwmon_chip_info max6621_chip_info = {
 	.info = max6621_info,
 };
 
-static int max6621_probe(struct i2c_client *client)
+static int max6621_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct max6621_data *data;
@@ -554,7 +555,7 @@ static struct i2c_driver max6621_driver = {
 		.name = MAX6621_DRV_NAME,
 		.of_match_table = of_match_ptr(max6621_of_match),
 	},
-	.probe_new	= max6621_probe,
+	.probe		= max6621_probe,
 	.id_table	= max6621_id,
 };
 

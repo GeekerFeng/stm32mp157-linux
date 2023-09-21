@@ -251,13 +251,12 @@ static int kobj_usermode_filter(struct kobject *kobj)
 
 static int init_uevent_argv(struct kobj_uevent_env *env, const char *subsystem)
 {
-	int buffer_size = sizeof(env->buf) - env->buflen;
 	int len;
 
-	len = strlcpy(&env->buf[env->buflen], subsystem, buffer_size);
-	if (len >= buffer_size) {
-		pr_warn("init_uevent_argv: buffer size of %d too small, needed %d\n",
-			buffer_size, len);
+	len = strlcpy(&env->buf[env->buflen], subsystem,
+		      sizeof(env->buf) - env->buflen);
+	if (len >= (sizeof(env->buf) - env->buflen)) {
+		WARN(1, KERN_ERR "init_uevent_argv: buffer size too small\n");
 		return -ENOMEM;
 	}
 
@@ -501,7 +500,7 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 	}
 	/* skip the event, if the filter returns zero. */
 	if (uevent_ops && uevent_ops->filter)
-		if (!uevent_ops->filter(kobj)) {
+		if (!uevent_ops->filter(kset, kobj)) {
 			pr_debug("kobject: '%s' (%p): %s: filter function "
 				 "caused the event to drop!\n",
 				 kobject_name(kobj), kobj, __func__);
@@ -510,7 +509,7 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 
 	/* originating subsystem */
 	if (uevent_ops && uevent_ops->name)
-		subsystem = uevent_ops->name(kobj);
+		subsystem = uevent_ops->name(kset, kobj);
 	else
 		subsystem = kobject_name(&kset->kobj);
 	if (!subsystem) {
@@ -554,7 +553,7 @@ int kobject_uevent_env(struct kobject *kobj, enum kobject_action action,
 
 	/* let the kset specific function add its stuff */
 	if (uevent_ops && uevent_ops->uevent) {
-		retval = uevent_ops->uevent(kobj, env);
+		retval = uevent_ops->uevent(kset, kobj, env);
 		if (retval) {
 			pr_debug("kobject: '%s' (%p): %s: uevent() returned "
 				 "%d\n", kobject_name(kobj), kobj,

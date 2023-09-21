@@ -39,6 +39,7 @@ properties:
   avdd-supply:
     description:
       The regulator supply for the ADC reference voltage.
+    maxItems: 1
 
   powerdown-gpios:
     description:
@@ -67,12 +68,10 @@ required:
   - compatible
   - reg
 
-additionalProperties: false
-
 examples:
   - |
     #include <dt-bindings/gpio/gpio.h>
-    spi {
+    spi0 {
         #address-cells = <1>;
         #size-cells = <0>;
 

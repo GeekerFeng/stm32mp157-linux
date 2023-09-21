@@ -20,8 +20,6 @@
 #include <linux/elf.h>
 #include <linux/tick.h>
 
-#include <asm/fpu.h>
-
 SYSCALL_DEFINE1(arc_settls, void *, user_tls_data_ptr)
 {
 	task_thread_info(current)->thr_ptr = (unsigned int)user_tls_data_ptr;
@@ -43,21 +41,21 @@ SYSCALL_DEFINE0(arc_gettls)
 	return task_thread_info(current)->thr_ptr;
 }
 
-SYSCALL_DEFINE3(arc_usr_cmpxchg, int __user *, uaddr, int, expected, int, new)
+SYSCALL_DEFINE3(arc_usr_cmpxchg, int *, uaddr, int, expected, int, new)
 {
 	struct pt_regs *regs = current_pt_regs();
 	u32 uval;
 	int ret;
 
 	/*
-	 * This is only for old cores lacking LLOCK/SCOND, which by definition
+	 * This is only for old cores lacking LLOCK/SCOND, which by defintion
 	 * can't possibly be SMP. Thus doesn't need to be SMP safe.
 	 * And this also helps reduce the overhead for serializing in
 	 * the UP case
 	 */
 	WARN_ON_ONCE(IS_ENABLED(CONFIG_SMP));
 
-	/* Z indicates to userspace if operation succeeded */
+	/* Z indicates to userspace if operation succeded */
 	regs->status32 &= ~STATUS_Z_MASK;
 
 	ret = access_ok(uaddr, sizeof(*uaddr));
@@ -90,10 +88,10 @@ fault:
 	if (unlikely(ret != -EFAULT))
 		 goto fail;
 
-	mmap_read_lock(current->mm);
-	ret = fixup_user_fault(current->mm, (unsigned long) uaddr,
+	down_read(&current->mm->mmap_sem);
+	ret = fixup_user_fault(current, current->mm, (unsigned long) uaddr,
 			       FAULT_FLAG_WRITE, NULL);
-	mmap_read_unlock(current->mm);
+	up_read(&current->mm->mmap_sem);
 
 	if (likely(!ret))
 		 goto again;
@@ -107,24 +105,32 @@ fail:
 
 void arch_cpu_idle(void)
 {
-	/* Re-enable interrupts <= default irq priority before committing SLEEP */
+	/* Re-enable interrupts <= default irq priority before commiting SLEEP */
 	const unsigned int arg = 0x10 | ARCV2_IRQ_DEF_PRIO;
 
 	__asm__ __volatile__(
 		"sleep %0	\n"
 		:
 		:"I"(arg)); /* can't be "r" has to be embedded const */
+}
 
-	raw_local_irq_disable();
+#elif defined(CONFIG_EZNPS_MTM_EXT)	/* ARC700 variant in NPS */
+
+void arch_cpu_idle(void)
+{
+	/* only the calling HW thread needs to sleep */
+	__asm__ __volatile__(
+		".word %0	\n"
+		:
+		:"i"(CTOP_INST_HWSCHD_WFT_IE12));
 }
 
 #else	/* ARC700 */
 
 void arch_cpu_idle(void)
 {
-	/* sleep, but enable both set E1/E2 (levels of interrupts) before committing */
+	/* sleep, but enable both set E1/E2 (levels of interrutps) before committing */
 	__asm__ __volatile__("sleep 0x3	\n");
-	raw_local_irq_disable();
 }
 
 #endif
@@ -165,11 +171,10 @@ asmlinkage void ret_from_fork(void);
  * |    user_r25    |
  * ------------------  <===== END of PAGE
  */
-int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
+int copy_thread(unsigned long clone_flags,
+		unsigned long usp, unsigned long kthread_arg,
+		struct task_struct *p)
 {
-	unsigned long clone_flags = args->flags;
-	unsigned long usp = args->stack;
-	unsigned long tls = args->tls;
 	struct pt_regs *c_regs;        /* child's pt_regs */
 	unsigned long *childksp;       /* to unwind out of __switch_to() */
 	struct callee_regs *c_callee;  /* child's callee regs */
@@ -195,11 +200,11 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 	childksp[0] = 0;			/* fp */
 	childksp[1] = (unsigned long)ret_from_fork; /* blink */
 
-	if (unlikely(args->fn)) {
+	if (unlikely(p->flags & PF_KTHREAD)) {
 		memset(c_regs, 0, sizeof(struct pt_regs));
 
-		c_callee->r13 = (unsigned long)args->fn_arg;
-		c_callee->r14 = (unsigned long)args->fn;
+		c_callee->r13 = kthread_arg;
+		c_callee->r14 = usp;  /* function */
 
 		return 0;
 	}
@@ -226,7 +231,7 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 		 * set task's userland tls data ptr from 4th arg
 		 * clone C-lib call is difft from clone sys-call
 		 */
-		task_thread_info(p)->thr_ptr = tls;
+		task_thread_info(p)->thr_ptr = regs->r3;
 	} else {
 		/* Normal fork case: set parent's TLS ptr in child */
 		task_thread_info(p)->thr_ptr =
@@ -259,7 +264,7 @@ int copy_thread(struct task_struct *p, const struct kernel_clone_args *args)
 /*
  * Do necessary setup to start up a new user task
  */
-void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long usp)
+void start_thread(struct pt_regs * regs, unsigned long pc, unsigned long usp)
 {
 	regs->sp = usp;
 	regs->ret = pc;
@@ -271,7 +276,9 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long usp)
 	 */
 	regs->status32 = STATUS_U_MASK | STATUS_L_MASK | ISA_INIT_STATUS_BITS;
 
-	fpu_init_task(regs);
+#ifdef CONFIG_EZNPS_MTM_EXT
+	regs->eflags = 0;
+#endif
 
 	/* bogus seed values for debugging */
 	regs->lp_start = 0x10;
@@ -283,6 +290,11 @@ void start_thread(struct pt_regs *regs, unsigned long pc, unsigned long usp)
  */
 void flush_thread(void)
 {
+}
+
+int dump_fpu(struct pt_regs *regs, elf_fpregset_t *fpu)
+{
+	return 0;
 }
 
 int elf_check_arch(const struct elf32_hdr *x)
@@ -298,7 +310,7 @@ int elf_check_arch(const struct elf32_hdr *x)
 	eflags = x->e_flags;
 	if ((eflags & EF_ARC_OSABI_MSK) != EF_ARC_OSABI_CURRENT) {
 		pr_err("ABI mismatch - you need newer toolchain\n");
-		force_fatal_sig(SIGSEGV);
+		force_sigsegv(SIGSEGV);
 		return 0;
 	}
 

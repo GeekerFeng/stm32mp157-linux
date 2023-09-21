@@ -22,8 +22,8 @@
 	};
 
 	soc {
-		uart0: serial@4007000 {
-			status = "okay";
+		uart0: uart@4007000 {
+			status = "ok";
 		};
 	};
 };

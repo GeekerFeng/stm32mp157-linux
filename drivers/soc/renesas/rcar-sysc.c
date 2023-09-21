@@ -15,7 +15,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/io.h>
-#include <linux/iopoll.h>
 #include <linux/soc/renesas/rcar-sysc.h>
 
 #include "rcar-sysc.h"
@@ -45,13 +44,13 @@
 #define PWRER_OFFS		0x14	/* Power Shutoff/Resume Error */
 
 
-#define SYSCSR_TIMEOUT		100
+#define SYSCSR_RETRIES		100
 #define SYSCSR_DELAY_US		1
 
 #define PWRER_RETRIES		100
 #define PWRER_DELAY_US		1
 
-#define SYSCISR_TIMEOUT		1000
+#define SYSCISR_RETRIES		1000
 #define SYSCISR_DELAY_US	1
 
 #define RCAR_PD_ALWAYS_ON	32	/* Always-on power area */
@@ -64,13 +63,11 @@ struct rcar_sysc_ch {
 
 static void __iomem *rcar_sysc_base;
 static DEFINE_SPINLOCK(rcar_sysc_lock); /* SMP CPUs + I/O devices */
-static u32 rcar_sysc_extmask_offs, rcar_sysc_extmask_val;
 
 static int rcar_sysc_pwr_on_off(const struct rcar_sysc_ch *sysc_ch, bool on)
 {
 	unsigned int sr_bit, reg_offs;
-	u32 val;
-	int ret;
+	int k;
 
 	if (on) {
 		sr_bit = SYSCSR_PONENB;
@@ -81,10 +78,13 @@ static int rcar_sysc_pwr_on_off(const struct rcar_sysc_ch *sysc_ch, bool on)
 	}
 
 	/* Wait until SYSC is ready to accept a power request */
-	ret = readl_poll_timeout_atomic(rcar_sysc_base + SYSCSR, val,
-					val & BIT(sr_bit), SYSCSR_DELAY_US,
-					SYSCSR_TIMEOUT);
-	if (ret)
+	for (k = 0; k < SYSCSR_RETRIES; k++) {
+		if (ioread32(rcar_sysc_base + SYSCSR) & BIT(sr_bit))
+			break;
+		udelay(SYSCSR_DELAY_US);
+	}
+
+	if (k == SYSCSR_RETRIES)
 		return -EAGAIN;
 
 	/* Submit power shutoff or power resume request */
@@ -98,19 +98,12 @@ static int rcar_sysc_power(const struct rcar_sysc_ch *sysc_ch, bool on)
 {
 	unsigned int isr_mask = BIT(sysc_ch->isr_bit);
 	unsigned int chan_mask = BIT(sysc_ch->chan_bit);
-	unsigned int status, k;
+	unsigned int status;
 	unsigned long flags;
-	int ret;
+	int ret = 0;
+	int k;
 
 	spin_lock_irqsave(&rcar_sysc_lock, flags);
-
-	/*
-	 * Mask external power requests for CPU or 3DG domains
-	 */
-	if (rcar_sysc_extmask_val) {
-		iowrite32(rcar_sysc_extmask_val,
-			  rcar_sysc_base + rcar_sysc_extmask_offs);
-	}
 
 	/*
 	 * The interrupt source needs to be enabled, but masked, to prevent the
@@ -143,18 +136,18 @@ static int rcar_sysc_power(const struct rcar_sysc_ch *sysc_ch, bool on)
 	}
 
 	/* Wait until the power shutoff or resume request has completed * */
-	ret = readl_poll_timeout_atomic(rcar_sysc_base + SYSCISR, status,
-					status & isr_mask, SYSCISR_DELAY_US,
-					SYSCISR_TIMEOUT);
-	if (ret)
+	for (k = 0; k < SYSCISR_RETRIES; k++) {
+		if (ioread32(rcar_sysc_base + SYSCISR) & isr_mask)
+			break;
+		udelay(SYSCISR_DELAY_US);
+	}
+
+	if (k == SYSCISR_RETRIES)
 		ret = -EIO;
 
 	iowrite32(isr_mask, rcar_sysc_base + SYSCISCR);
 
  out:
-	if (rcar_sysc_extmask_val)
-		iowrite32(0, rcar_sysc_base + rcar_sysc_extmask_offs);
-
 	spin_unlock_irqrestore(&rcar_sysc_lock, flags);
 
 	pr_debug("sysc power %s domain %d: %08x -> %d\n", on ? "on" : "off",
@@ -268,9 +261,6 @@ finalize:
 }
 
 static const struct of_device_id rcar_sysc_matches[] __initconst = {
-#ifdef CONFIG_SYSC_R8A7742
-	{ .compatible = "renesas,r8a7742-sysc", .data = &r8a7742_sysc_info },
-#endif
 #ifdef CONFIG_SYSC_R8A7743
 	{ .compatible = "renesas,r8a7743-sysc", .data = &r8a7743_sysc_info },
 	/* RZ/G1N is identical to RZ/G2M w.r.t. power domains. */
@@ -285,14 +275,8 @@ static const struct of_device_id rcar_sysc_matches[] __initconst = {
 #ifdef CONFIG_SYSC_R8A774A1
 	{ .compatible = "renesas,r8a774a1-sysc", .data = &r8a774a1_sysc_info },
 #endif
-#ifdef CONFIG_SYSC_R8A774B1
-	{ .compatible = "renesas,r8a774b1-sysc", .data = &r8a774b1_sysc_info },
-#endif
 #ifdef CONFIG_SYSC_R8A774C0
 	{ .compatible = "renesas,r8a774c0-sysc", .data = &r8a774c0_sysc_info },
-#endif
-#ifdef CONFIG_SYSC_R8A774E1
-	{ .compatible = "renesas,r8a774e1-sysc", .data = &r8a774e1_sysc_info },
 #endif
 #ifdef CONFIG_SYSC_R8A7779
 	{ .compatible = "renesas,r8a7779-sysc", .data = &r8a7779_sysc_info },
@@ -314,11 +298,8 @@ static const struct of_device_id rcar_sysc_matches[] __initconst = {
 #ifdef CONFIG_SYSC_R8A7795
 	{ .compatible = "renesas,r8a7795-sysc", .data = &r8a7795_sysc_info },
 #endif
-#ifdef CONFIG_SYSC_R8A77960
-	{ .compatible = "renesas,r8a7796-sysc", .data = &r8a77960_sysc_info },
-#endif
-#ifdef CONFIG_SYSC_R8A77961
-	{ .compatible = "renesas,r8a77961-sysc", .data = &r8a77961_sysc_info },
+#ifdef CONFIG_SYSC_R8A7796
+	{ .compatible = "renesas,r8a7796-sysc", .data = &r8a7796_sysc_info },
 #endif
 #ifdef CONFIG_SYSC_R8A77965
 	{ .compatible = "renesas,r8a77965-sysc", .data = &r8a77965_sysc_info },
@@ -379,10 +360,6 @@ static int __init rcar_sysc_pd_init(void)
 
 	rcar_sysc_base = base;
 
-	/* Optional External Request Mask Register */
-	rcar_sysc_extmask_offs = info->extmask_offs;
-	rcar_sysc_extmask_val = info->extmask_val;
-
 	domains = kzalloc(sizeof(*domains), GFP_KERNEL);
 	if (!domains) {
 		error = -ENOMEM;
@@ -396,21 +373,19 @@ static int __init rcar_sysc_pd_init(void)
 	for (i = 0; i < info->num_areas; i++) {
 		const struct rcar_sysc_area *area = &info->areas[i];
 		struct rcar_sysc_pd *pd;
-		size_t n;
 
 		if (!area->name) {
 			/* Skip NULLified area */
 			continue;
 		}
 
-		n = strlen(area->name) + 1;
-		pd = kzalloc(sizeof(*pd) + n, GFP_KERNEL);
+		pd = kzalloc(sizeof(*pd) + strlen(area->name) + 1, GFP_KERNEL);
 		if (!pd) {
 			error = -ENOMEM;
 			goto out_put;
 		}
 
-		memcpy(pd->name, area->name, n);
+		strcpy(pd->name, area->name);
 		pd->genpd.name = pd->name;
 		pd->ch.chan_offs = area->chan_offs;
 		pd->ch.chan_bit = area->chan_bit;
@@ -436,8 +411,6 @@ static int __init rcar_sysc_pd_init(void)
 	}
 
 	error = of_genpd_add_provider_onecell(np, &domains->onecell_data);
-	if (!error)
-		fwnode_dev_initialized(of_fwnode_handle(np), true);
 
 out_put:
 	of_node_put(np);

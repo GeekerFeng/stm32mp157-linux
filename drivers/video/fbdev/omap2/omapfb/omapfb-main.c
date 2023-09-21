@@ -882,7 +882,7 @@ int omapfb_setup_overlay(struct fb_info *fbi, struct omap_overlay *ovl,
 				/ (var->bits_per_pixel >> 2);
 			break;
 		}
-		fallthrough;
+		/* fall through */
 	default:
 		screen_width = fix->line_length / (var->bits_per_pixel >> 3);
 		break;
@@ -1154,12 +1154,16 @@ static int _setcolreg(struct fb_info *fbi, u_int regno, u_int red, u_int green,
 		   r = fbdev->ctrl->setcolreg(regno, red, green, blue,
 		   transp, update_hw_pal);
 		   */
+		/* Fallthrough */
 		r = -EINVAL;
 		break;
 	case OMAPFB_COLOR_RGB565:
 	case OMAPFB_COLOR_RGB444:
 	case OMAPFB_COLOR_RGB24P:
 	case OMAPFB_COLOR_RGB24U:
+		if (r != 0)
+			break;
+
 		if (regno < 16) {
 			u32 pal;
 			pal = ((red >> (16 - var->red.length)) <<
@@ -1276,7 +1280,7 @@ ssize_t omapfb_write(struct fb_info *info, const char __user *buf,
 }
 #endif
 
-static const struct fb_ops omapfb_ops = {
+static struct fb_ops omapfb_ops = {
 	.owner          = THIS_MODULE,
 	.fb_open        = omapfb_open,
 	.fb_release     = omapfb_release,
@@ -1331,7 +1335,7 @@ static void clear_fb_info(struct fb_info *fbi)
 {
 	memset(&fbi->var, 0, sizeof(fbi->var));
 	memset(&fbi->fix, 0, sizeof(fbi->fix));
-	strscpy(fbi->fix.id, MODULE_NAME, sizeof(fbi->fix.id));
+	strlcpy(fbi->fix.id, MODULE_NAME, sizeof(fbi->fix.id));
 }
 
 static int omapfb_free_all_fbmem(struct omapfb2_device *fbdev)
@@ -1854,6 +1858,7 @@ static void omapfb_free_resources(struct omapfb2_device *fbdev)
 	}
 
 	if (fbdev->auto_update_wq != NULL) {
+		flush_workqueue(fbdev->auto_update_wq);
 		destroy_workqueue(fbdev->auto_update_wq);
 		fbdev->auto_update_wq = NULL;
 	}
@@ -2599,7 +2604,7 @@ err0:
 	return r;
 }
 
-static void omapfb_remove(struct platform_device *pdev)
+static int omapfb_remove(struct platform_device *pdev)
 {
 	struct omapfb2_device *fbdev = platform_get_drvdata(pdev);
 
@@ -2610,11 +2615,13 @@ static void omapfb_remove(struct platform_device *pdev)
 	omapfb_free_resources(fbdev);
 
 	omapdss_compat_uninit();
+
+	return 0;
 }
 
 static struct platform_driver omapfb_driver = {
 	.probe		= omapfb_probe,
-	.remove_new     = omapfb_remove,
+	.remove         = omapfb_remove,
 	.driver         = {
 		.name   = "omapfb",
 	},

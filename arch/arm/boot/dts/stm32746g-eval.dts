@@ -55,7 +55,7 @@
 		stdout-path = "serial0:115200n8";
 	};
 
-	memory@c0000000 {
+	memory {
 		device_type = "memory";
 		reg = <0xc0000000 0x2000000>;
 	};
@@ -66,25 +66,27 @@
 
 	leds {
 		compatible = "gpio-leds";
-		led-green {
+		green {
 			gpios = <&gpiof 10 1>;
 			linux,default-trigger = "heartbeat";
 		};
-		led-orange {
+		orange {
 			gpios = <&stmfx_pinctrl 17 1>;
 		};
-		led-red {
+		red {
 			gpios = <&gpiob 7 1>;
 		};
-		led-blue {
+		blue {
 			gpios = <&stmfx_pinctrl 19 1>;
 		};
 	};
 
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
+		#address-cells = <1>;
+		#size-cells = <0>;
 		autorepeat;
-		button-0 {
+		button@0 {
 			label = "Wake up";
 			linux,code = <KEY_WAKEUP>;
 			gpios = <&gpioc 13 0>;
@@ -93,6 +95,7 @@
 
 	joystick {
 		compatible = "gpio-keys";
+		#size-cells = <0>;
 		pinctrl-0 = <&joystick_pins>;
 		pinctrl-names = "default";
 		button-0 {
@@ -163,7 +166,7 @@
 		interrupts = <8 IRQ_TYPE_EDGE_RISING>;
 		interrupt-parent = <&gpioi>;
 
-		stmfx_pinctrl: pinctrl {
+		stmfx_pinctrl: stmfx-pin-controller {
 			compatible = "st,stmfx-0300-pinctrl";
 			gpio-controller;
 			#gpio-cells = <2>;
@@ -192,18 +195,6 @@
 	pinctrl-0 = <&sdio_pins_a>;
 	pinctrl-1 = <&sdio_pins_od_a>;
 	bus-width = <4>;
-};
-
-&timers5 {
-	/* Override timer5 to act as clockevent */
-	compatible = "st,stm32-timer";
-	interrupts = <50>;
-	status = "okay";
-	/delete-property/#address-cells;
-	/delete-property/#size-cells;
-	/delete-property/clock-names;
-	/delete-node/pwm;
-	/delete-node/timer@4;
 };
 
 &usart1 {

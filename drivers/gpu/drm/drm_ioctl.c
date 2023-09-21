@@ -33,6 +33,7 @@
 #include <linux/pci.h>
 #include <linux/uaccess.h>
 
+#include <drm/drm_agpsupport.h>
 #include <drm/drm_auth.h>
 #include <drm/drm_crtc.h>
 #include <drm/drm_drv.h>
@@ -83,7 +84,7 @@
  *
  * 1. Directly call VERSION to get the version and to match against the driver
  *    name returned by that ioctl. Note that SET_VERSION is not called, which
- *    means the unique name for the master node just opening is _not_ filled
+ *    means the the unique name for the master node just opening is _not_ filled
  *    out. This despite that with current drm device nodes are always bound to
  *    one device, and can't be runtime assigned like with drm 1.0.
  * 2. Match driver name. If it mismatches, proceed to the next device node.
@@ -117,18 +118,17 @@ int drm_getunique(struct drm_device *dev, void *data,
 		  struct drm_file *file_priv)
 {
 	struct drm_unique *u = data;
-	struct drm_master *master;
+	struct drm_master *master = file_priv->master;
 
-	mutex_lock(&dev->master_mutex);
-	master = file_priv->master;
+	mutex_lock(&master->dev->master_mutex);
 	if (u->unique_len >= master->unique_len) {
 		if (copy_to_user(u->unique, master->unique, master->unique_len)) {
-			mutex_unlock(&dev->master_mutex);
+			mutex_unlock(&master->dev->master_mutex);
 			return -EFAULT;
 		}
 	}
 	u->unique_len = master->unique_len;
-	mutex_unlock(&dev->master_mutex);
+	mutex_unlock(&master->dev->master_mutex);
 
 	return 0;
 }
@@ -297,7 +297,7 @@ static int drm_getcap(struct drm_device *dev, void *data, struct drm_file *file_
 			req->value = 64;
 		break;
 	case DRM_CAP_ADDFB2_MODIFIERS:
-		req->value = !dev->mode_config.fb_modifiers_not_supported;
+		req->value = dev->mode_config.allow_fb_modifiers;
 		break;
 	case DRM_CAP_CRTC_IN_VBLANK_EVENT:
 		req->value = 1;
@@ -426,7 +426,7 @@ done:
 }
 
 /**
- * drm_noop - DRM no-op ioctl implementation
+ * drm_noop - DRM no-op ioctl implemntation
  * @dev: DRM device for the ioctl
  * @data: data pointer for the ioctl
  * @file_priv: DRM file for the ioctl call
@@ -440,13 +440,13 @@ done:
 int drm_noop(struct drm_device *dev, void *data,
 	     struct drm_file *file_priv)
 {
-	drm_dbg_core(dev, "\n");
+	DRM_DEBUG("\n");
 	return 0;
 }
 EXPORT_SYMBOL(drm_noop);
 
 /**
- * drm_invalid_op - DRM invalid ioctl implementation
+ * drm_invalid_op - DRM invalid ioctl implemntation
  * @dev: DRM device for the ioctl
  * @data: data pointer for the ioctl
  * @file_priv: DRM file for the ioctl call
@@ -472,13 +472,7 @@ EXPORT_SYMBOL(drm_invalid_op);
  */
 static int drm_copy_field(char __user *buf, size_t *buf_len, const char *value)
 {
-	size_t len;
-
-	/* don't attempt to copy a NULL pointer */
-	if (WARN_ONCE(!value, "BUG: the value to copy was not set!")) {
-		*buf_len = 0;
-		return 0;
-	}
+	int len;
 
 	/* don't overflow userbuf */
 	len = strlen(value);
@@ -528,7 +522,19 @@ int drm_version(struct drm_device *dev, void *data,
 	return err;
 }
 
-static int drm_ioctl_permit(u32 flags, struct drm_file *file_priv)
+/**
+ * drm_ioctl_permit - Check ioctl permissions against caller
+ *
+ * @flags: ioctl permission flags.
+ * @file_priv: Pointer to struct drm_file identifying the caller.
+ *
+ * Checks whether the caller is allowed to run an ioctl with the
+ * indicated permissions.
+ *
+ * Returns:
+ * Zero if allowed, -EACCES otherwise.
+ */
+int drm_ioctl_permit(u32 flags, struct drm_file *file_priv)
 {
 	/* ROOT_ONLY is only for CAP_SYS_ADMIN */
 	if (unlikely((flags & DRM_ROOT_ONLY) && !capable(CAP_SYS_ADMIN)))
@@ -551,6 +557,7 @@ static int drm_ioctl_permit(u32 flags, struct drm_file *file_priv)
 
 	return 0;
 }
+EXPORT_SYMBOL(drm_ioctl_permit);
 
 #define DRM_IOCTL_DEF(ioctl, _func, _flags)	\
 	[DRM_IOCTL_NR(ioctl)] = {		\
@@ -571,8 +578,7 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 	DRM_IOCTL_DEF(DRM_IOCTL_VERSION, drm_version, DRM_RENDER_ALLOW),
 	DRM_IOCTL_DEF(DRM_IOCTL_GET_UNIQUE, drm_getunique, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_GET_MAGIC, drm_getmagic, 0),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_IRQ_BUSID, drm_legacy_irq_by_busid,
-			     DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_IRQ_BUSID, drm_irq_by_busid, DRM_MASTER|DRM_ROOT_ONLY),
 
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_GET_MAP, drm_legacy_getmap_ioctl, 0),
 
@@ -593,8 +599,8 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_SET_SAREA_CTX, drm_legacy_setsareactx, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_GET_SAREA_CTX, drm_legacy_getsareactx, DRM_AUTH),
 
-	DRM_IOCTL_DEF(DRM_IOCTL_SET_MASTER, drm_setmaster_ioctl, 0),
-	DRM_IOCTL_DEF(DRM_IOCTL_DROP_MASTER, drm_dropmaster_ioctl, 0),
+	DRM_IOCTL_DEF(DRM_IOCTL_SET_MASTER, drm_setmaster_ioctl, DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_DROP_MASTER, drm_dropmaster_ioctl, DRM_ROOT_ONLY),
 
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_ADD_CTX, drm_legacy_addctx, DRM_AUTH|DRM_ROOT_ONLY),
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_RM_CTX, drm_legacy_rmctx, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
@@ -621,21 +627,14 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_CONTROL, drm_legacy_irq_control, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
 
 #if IS_ENABLED(CONFIG_AGP)
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_ACQUIRE, drm_legacy_agp_acquire_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_RELEASE, drm_legacy_agp_release_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_ENABLE, drm_legacy_agp_enable_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_INFO, drm_legacy_agp_info_ioctl, DRM_AUTH),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_ALLOC, drm_legacy_agp_alloc_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_FREE, drm_legacy_agp_free_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_BIND, drm_legacy_agp_bind_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
-	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_AGP_UNBIND, drm_legacy_agp_unbind_ioctl,
-			     DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_ACQUIRE, drm_agp_acquire_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_RELEASE, drm_agp_release_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_ENABLE, drm_agp_enable_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_INFO, drm_agp_info_ioctl, DRM_AUTH),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_ALLOC, drm_agp_alloc_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_FREE, drm_agp_free_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_BIND, drm_agp_bind_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
+	DRM_IOCTL_DEF(DRM_IOCTL_AGP_UNBIND, drm_agp_unbind_ioctl, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
 #endif
 
 	DRM_LEGACY_IOCTL_DEF(DRM_IOCTL_SG_ALLOC, drm_legacy_sg_alloc, DRM_AUTH|DRM_MASTER|DRM_ROOT_ONLY),
@@ -653,8 +652,8 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETRESOURCES, drm_mode_getresources, 0),
 
-	DRM_IOCTL_DEF(DRM_IOCTL_PRIME_HANDLE_TO_FD, drm_prime_handle_to_fd_ioctl, DRM_RENDER_ALLOW),
-	DRM_IOCTL_DEF(DRM_IOCTL_PRIME_FD_TO_HANDLE, drm_prime_fd_to_handle_ioctl, DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF(DRM_IOCTL_PRIME_HANDLE_TO_FD, drm_prime_handle_to_fd_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
+	DRM_IOCTL_DEF(DRM_IOCTL_PRIME_FD_TO_HANDLE, drm_prime_fd_to_handle_ioctl, DRM_AUTH|DRM_RENDER_ALLOW),
 
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPLANERESOURCES, drm_mode_getplane_res, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETCRTC, drm_mode_getcrtc, 0),
@@ -672,7 +671,6 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_SETPROPERTY, drm_connector_property_set_ioctl, DRM_MASTER),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETPROPBLOB, drm_mode_getblob_ioctl, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB, drm_mode_getfb, 0),
-	DRM_IOCTL_DEF(DRM_IOCTL_MODE_GETFB2, drm_mode_getfb2_ioctl, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB, drm_mode_addfb_ioctl, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_ADDFB2, drm_mode_addfb2_ioctl, 0),
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_RMFB, drm_mode_rmfb_ioctl, 0),
@@ -718,7 +716,7 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
 	DRM_IOCTL_DEF(DRM_IOCTL_MODE_REVOKE_LEASE, drm_mode_revoke_lease_ioctl, DRM_MASTER),
 };
 
-#define DRM_CORE_IOCTL_COUNT	ARRAY_SIZE(drm_ioctls)
+#define DRM_CORE_IOCTL_COUNT	ARRAY_SIZE( drm_ioctls )
 
 /**
  * DOC: driver specific ioctls
@@ -742,7 +740,7 @@ static const struct drm_ioctl_desc drm_ioctls[] = {
  *     };
  *
  * Please make sure that you follow all the best practices from
- * ``Documentation/process/botching-up-ioctls.rst``. Note that drm_ioctl()
+ * ``Documentation/ioctl/botching-up-ioctls.rst``. Note that drm_ioctl()
  * automatically zero-extends structures, hence make sure you can add more stuff
  * at the end, i.e. don't put a variable sized array there.
  *
@@ -827,9 +825,6 @@ long drm_ioctl(struct file *filp,
 	if (drm_dev_is_unplugged(dev))
 		return -ENODEV;
 
-	if (DRM_IOCTL_TYPE(cmd) != DRM_IOCTL_BASE)
-		return -ENOTTY;
-
 	is_driver_ioctl = nr >= DRM_COMMAND_BASE && nr < DRM_COMMAND_END;
 
 	if (is_driver_ioctl) {
@@ -856,16 +851,16 @@ long drm_ioctl(struct file *filp,
 		out_size = 0;
 	ksize = max(max(in_size, out_size), drv_size);
 
-	drm_dbg_core(dev, "comm=\"%s\" pid=%d, dev=0x%lx, auth=%d, %s\n",
-		     current->comm, task_pid_nr(current),
-		     (long)old_encode_dev(file_priv->minor->kdev->devt),
-		     file_priv->authenticated, ioctl->name);
+	DRM_DEBUG("pid=%d, dev=0x%lx, auth=%d, %s\n",
+		  task_pid_nr(current),
+		  (long)old_encode_dev(file_priv->minor->kdev->devt),
+		  file_priv->authenticated, ioctl->name);
 
 	/* Do not trust userspace, use our own definition */
 	func = ioctl->func;
 
 	if (unlikely(!func)) {
-		drm_dbg_core(dev, "no function\n");
+		DRM_DEBUG("no function\n");
 		retcode = -EINVAL;
 		goto err_i1;
 	}
@@ -894,17 +889,15 @@ long drm_ioctl(struct file *filp,
 
       err_i1:
 	if (!ioctl)
-		drm_dbg_core(dev,
-			     "invalid ioctl: comm=\"%s\", pid=%d, dev=0x%lx, auth=%d, cmd=0x%02x, nr=0x%02x\n",
-			     current->comm, task_pid_nr(current),
-			     (long)old_encode_dev(file_priv->minor->kdev->devt),
-			     file_priv->authenticated, cmd, nr);
+		DRM_DEBUG("invalid ioctl: pid=%d, dev=0x%lx, auth=%d, cmd=0x%02x, nr=0x%02x\n",
+			  task_pid_nr(current),
+			  (long)old_encode_dev(file_priv->minor->kdev->devt),
+			  file_priv->authenticated, cmd, nr);
 
 	if (kdata != stack_kdata)
 		kfree(kdata);
 	if (retcode)
-		drm_dbg_core(dev, "comm=\"%s\", pid=%d, ret=%d\n",
-			     current->comm, task_pid_nr(current), retcode);
+		DRM_DEBUG("pid=%d, ret = %d\n", task_pid_nr(current), retcode);
 	return retcode;
 }
 EXPORT_SYMBOL(drm_ioctl);

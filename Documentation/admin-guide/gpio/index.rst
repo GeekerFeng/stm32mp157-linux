@@ -7,10 +7,7 @@ gpio
 .. toctree::
     :maxdepth: 1
 
-    gpio-aggregator
     sysfs
-    gpio-mockup
-    gpio-sim
 
 .. only::  subproject and html
 

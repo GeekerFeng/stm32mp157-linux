@@ -41,6 +41,10 @@ MODULE_LICENSE("GPL");
 /* set maximum interval as 1 second */
 #define MAX_INTERVAL			1000
 
+#define MSR_F15H_CU_PWR_ACCUMULATOR	0xc001007a
+#define MSR_F15H_CU_MAX_PWR_ACCUMULATOR	0xc001007b
+#define MSR_F15H_PTSC			0xc0010280
+
 #define PCI_DEVICE_ID_AMD_15H_M70H_NB_F4 0x15b4
 
 struct fam15h_power_data {
@@ -166,7 +170,7 @@ static int read_registers(struct fam15h_power_data *data)
 
 	memset(data->cu_on, 0, sizeof(int) * MAX_CUS);
 
-	cpus_read_lock();
+	get_online_cpus();
 
 	/*
 	 * Choose the first online core of each compute unit, and then
@@ -190,7 +194,7 @@ static int read_registers(struct fam15h_power_data *data)
 
 	on_each_cpu_mask(mask, do_read_registers_on_cu, data, true);
 
-	cpus_read_unlock();
+	put_online_cpus();
 	free_cpumask_var(mask);
 
 	return 0;

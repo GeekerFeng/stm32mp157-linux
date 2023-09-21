@@ -22,7 +22,6 @@
 /**
  * struct rockchip_pcie_ep - private data for PCIe endpoint controller driver
  * @rockchip: Rockchip PCIe controller
- * @epc: PCI EPC device
  * @max_regions: maximum number of regions supported by hardware
  * @ob_region_map: bitmask of mapped outbound regions
  * @ob_addr: base addresses in the AXI bus where the outbound regions start
@@ -122,7 +121,7 @@ static void rockchip_pcie_prog_ep_ob_atu(struct rockchip_pcie *rockchip, u8 fn,
 			    ROCKCHIP_PCIE_AT_OB_REGION_CPU_ADDR1(r));
 }
 
-static int rockchip_pcie_ep_write_header(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rockchip_pcie_ep_write_header(struct pci_epc *epc, u8 fn,
 					 struct pci_epf_header *hdr)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
@@ -159,7 +158,7 @@ static int rockchip_pcie_ep_write_header(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static int rockchip_pcie_ep_set_bar(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rockchip_pcie_ep_set_bar(struct pci_epc *epc, u8 fn,
 				    struct pci_epf_bar *epf_bar)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
@@ -227,7 +226,7 @@ static int rockchip_pcie_ep_set_bar(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static void rockchip_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn, u8 vfn,
+static void rockchip_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn,
 				       struct pci_epf_bar *epf_bar)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
@@ -256,7 +255,7 @@ static void rockchip_pcie_ep_clear_bar(struct pci_epc *epc, u8 fn, u8 vfn,
 			    ROCKCHIP_PCIE_AT_IB_EP_FUNC_BAR_ADDR1(fn, bar));
 }
 
-static int rockchip_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rockchip_pcie_ep_map_addr(struct pci_epc *epc, u8 fn,
 				     phys_addr_t addr, u64 pci_addr,
 				     size_t size)
 {
@@ -264,7 +263,8 @@ static int rockchip_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
 	struct rockchip_pcie *pcie = &ep->rockchip;
 	u32 r;
 
-	r = find_first_zero_bit(&ep->ob_region_map, BITS_PER_LONG);
+	r = find_first_zero_bit(&ep->ob_region_map,
+				sizeof(ep->ob_region_map) * BITS_PER_LONG);
 	/*
 	 * Region 0 is reserved for configuration space and shouldn't
 	 * be used elsewhere per TRM, so leave it out.
@@ -283,7 +283,7 @@ static int rockchip_pcie_ep_map_addr(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static void rockchip_pcie_ep_unmap_addr(struct pci_epc *epc, u8 fn, u8 vfn,
+static void rockchip_pcie_ep_unmap_addr(struct pci_epc *epc, u8 fn,
 					phys_addr_t addr)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
@@ -307,7 +307,7 @@ static void rockchip_pcie_ep_unmap_addr(struct pci_epc *epc, u8 fn, u8 vfn,
 	clear_bit(r, &ep->ob_region_map);
 }
 
-static int rockchip_pcie_ep_set_msi(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rockchip_pcie_ep_set_msi(struct pci_epc *epc, u8 fn,
 				    u8 multi_msg_cap)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
@@ -328,7 +328,7 @@ static int rockchip_pcie_ep_set_msi(struct pci_epc *epc, u8 fn, u8 vfn,
 	return 0;
 }
 
-static int rockchip_pcie_ep_get_msi(struct pci_epc *epc, u8 fn, u8 vfn)
+static int rockchip_pcie_ep_get_msi(struct pci_epc *epc, u8 fn)
 {
 	struct rockchip_pcie_ep *ep = epc_get_drvdata(epc);
 	struct rockchip_pcie *rockchip = &ep->rockchip;
@@ -470,7 +470,7 @@ static int rockchip_pcie_ep_send_msi_irq(struct rockchip_pcie_ep *ep, u8 fn,
 	return 0;
 }
 
-static int rockchip_pcie_ep_raise_irq(struct pci_epc *epc, u8 fn, u8 vfn,
+static int rockchip_pcie_ep_raise_irq(struct pci_epc *epc, u8 fn,
 				      enum pci_epc_irq_type type,
 				      u16 interrupt_num)
 {
@@ -509,7 +509,7 @@ static const struct pci_epc_features rockchip_pcie_epc_features = {
 };
 
 static const struct pci_epc_features*
-rockchip_pcie_ep_get_features(struct pci_epc *epc, u8 func_no, u8 vfunc_no)
+rockchip_pcie_ep_get_features(struct pci_epc *epc, u8 func_no)
 {
 	return &rockchip_pcie_epc_features;
 }
@@ -615,7 +615,7 @@ static int rockchip_pcie_ep_probe(struct platform_device *pdev)
 	rockchip_pcie_write(rockchip, BIT(0), PCIE_CORE_PHY_FUNC_CFG);
 
 	err = pci_epc_mem_init(epc, rockchip->mem_res->start,
-			       resource_size(rockchip->mem_res), PAGE_SIZE);
+			       resource_size(rockchip->mem_res));
 	if (err < 0) {
 		dev_err(dev, "failed to initialize the memory space\n");
 		goto err_uninit_port;

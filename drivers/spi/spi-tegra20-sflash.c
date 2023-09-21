@@ -280,7 +280,7 @@ static int tegra_sflash_start_transfer_one(struct spi_device *spi,
 			command |= SPI_ACTIVE_SCLK_DRIVE_HIGH;
 		else
 			command |= SPI_ACTIVE_SCLK_DRIVE_LOW;
-		command |= SPI_CS0_EN << spi_get_chipselect(spi, 0);
+		command |= SPI_CS0_EN << spi->chip_select;
 	} else {
 		command = tsd->command_reg;
 		command &= ~SPI_BIT_LENGTH(~0);
@@ -341,10 +341,10 @@ static int tegra_sflash_transfer_one_message(struct spi_master *master,
 			goto exit;
 		}
 		msg->actual_length += xfer->len;
-		if (xfer->cs_change && xfer->delay.value) {
+		if (xfer->cs_change && xfer->delay_usecs) {
 			tegra_sflash_writel(tsd, tsd->def_command_reg,
 					SPI_COMMAND);
-			spi_transfer_delay_exec(xfer);
+			udelay(xfer->delay_usecs);
 		}
 	}
 	ret = 0;
@@ -358,8 +358,9 @@ exit:
 static irqreturn_t handle_cpu_based_xfer(struct tegra_sflash_data *tsd)
 {
 	struct spi_transfer *t = tsd->curr_xfer;
+	unsigned long flags;
 
-	spin_lock(&tsd->lock);
+	spin_lock_irqsave(&tsd->lock, flags);
 	if (tsd->tx_status || tsd->rx_status || (tsd->status_reg & SPI_BSY)) {
 		dev_err(tsd->dev,
 			"CpuXfer ERROR bit set 0x%x\n", tsd->status_reg);
@@ -389,7 +390,7 @@ static irqreturn_t handle_cpu_based_xfer(struct tegra_sflash_data *tsd)
 	tegra_sflash_calculate_curr_xfer_param(tsd->cur_spi, tsd, t);
 	tegra_sflash_start_cpu_based_transfer(tsd, t);
 exit:
-	spin_unlock(&tsd->lock);
+	spin_unlock_irqrestore(&tsd->lock, flags);
 	return IRQ_HANDLED;
 }
 
@@ -486,7 +487,7 @@ static int tegra_sflash_probe(struct platform_device *pdev)
 			goto exit_pm_disable;
 	}
 
-	ret = pm_runtime_resume_and_get(&pdev->dev);
+	ret = pm_runtime_get_sync(&pdev->dev);
 	if (ret < 0) {
 		dev_err(&pdev->dev, "pm runtime get failed, e = %d\n", ret);
 		goto exit_pm_disable;
@@ -520,7 +521,7 @@ exit_free_master:
 	return ret;
 }
 
-static void tegra_sflash_remove(struct platform_device *pdev)
+static int tegra_sflash_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct tegra_sflash_data	*tsd = spi_master_get_devdata(master);
@@ -530,6 +531,8 @@ static void tegra_sflash_remove(struct platform_device *pdev)
 	pm_runtime_disable(&pdev->dev);
 	if (!pm_runtime_status_suspended(&pdev->dev))
 		tegra_sflash_runtime_suspend(&pdev->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -546,7 +549,7 @@ static int tegra_sflash_resume(struct device *dev)
 	struct tegra_sflash_data *tsd = spi_master_get_devdata(master);
 	int ret;
 
-	ret = pm_runtime_resume_and_get(dev);
+	ret = pm_runtime_get_sync(dev);
 	if (ret < 0) {
 		dev_err(dev, "pm runtime failed, e = %d\n", ret);
 		return ret;
@@ -596,7 +599,7 @@ static struct platform_driver tegra_sflash_driver = {
 		.of_match_table	= tegra_sflash_of_match,
 	},
 	.probe =	tegra_sflash_probe,
-	.remove_new =	tegra_sflash_remove,
+	.remove =	tegra_sflash_remove,
 };
 module_platform_driver(tegra_sflash_driver);
 

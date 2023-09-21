@@ -5,7 +5,7 @@
  * 2011 (c) Aeroflex Gaisler AB
  *
  * Full documentation of the core can be found here:
- * https://www.gaisler.com/products/grlib/grip.pdf
+ * http://www.gaisler.com/products/grlib/grip.pdf
  *
  * Contributors: Kristoffer Glembo <kristoffer@gaisler.com>
  */
@@ -251,7 +251,7 @@ static int grvga_pan_display(struct fb_var_screeninfo *var,
 	return 0;
 }
 
-static const struct fb_ops grvga_ops = {
+static struct fb_ops grvga_ops = {
 	.owner          = THIS_MODULE,
 	.fb_check_var   = grvga_check_var,
 	.fb_set_par	= grvga_set_par,
@@ -504,7 +504,7 @@ free_fb:
 	return retval;
 }
 
-static void grvga_remove(struct platform_device *device)
+static int grvga_remove(struct platform_device *device)
 {
 	struct fb_info *info = dev_get_drvdata(&device->dev);
 	struct grvga_par *par;
@@ -524,6 +524,8 @@ static void grvga_remove(struct platform_device *device)
 
 		framebuffer_release(info);
 	}
+
+	return 0;
 }
 
 static struct of_device_id svgactrl_of_match[] = {
@@ -543,7 +545,7 @@ static struct platform_driver grvga_driver = {
 		.of_match_table = svgactrl_of_match,
 	},
 	.probe		= grvga_probe,
-	.remove_new	= grvga_remove,
+	.remove		= grvga_remove,
 };
 
 module_platform_driver(grvga_driver);

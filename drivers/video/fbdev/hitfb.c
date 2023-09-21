@@ -23,6 +23,7 @@
 
 #include <asm/machvec.h>
 #include <linux/uaccess.h>
+#include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/hd64461.h>
 #include <cpu/dac.h>
@@ -310,7 +311,7 @@ static int hitfb_set_par(struct fb_info *info)
 	return 0;
 }
 
-static const struct fb_ops hitfb_ops = {
+static struct fb_ops hitfb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_check_var	= hitfb_check_var,
 	.fb_set_par		= hitfb_set_par,
@@ -415,13 +416,15 @@ err_fb:
 	return ret;
 }
 
-static void hitfb_remove(struct platform_device *dev)
+static int hitfb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
 
 	unregister_framebuffer(info);
 	fb_dealloc_cmap(&info->cmap);
 	framebuffer_release(info);
+
+	return 0;
 }
 
 static int hitfb_suspend(struct device *dev)
@@ -458,7 +461,7 @@ static const struct dev_pm_ops hitfb_dev_pm_ops = {
 
 static struct platform_driver hitfb_driver = {
 	.probe		= hitfb_probe,
-	.remove_new	= hitfb_remove,
+	.remove		= hitfb_remove,
 	.driver		= {
 		.name	= "hitfb",
 		.pm	= &hitfb_dev_pm_ops,

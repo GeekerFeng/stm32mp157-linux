@@ -113,8 +113,7 @@ struct hfi_msg_sys_ping_ack_pkt {
 struct hfi_msg_sys_property_info_pkt {
 	struct hfi_pkt_hdr hdr;
 	u32 num_properties;
-	u32 property;
-	u8 data[];
+	u32 data[1];
 };
 
 struct hfi_msg_session_load_resources_done_pkt {
@@ -156,7 +155,7 @@ struct hfi_msg_session_empty_buffer_done_pkt {
 	u32 input_tag;
 	u32 packet_buffer;
 	u32 extradata_buffer;
-	u32 data[];
+	u32 data[0];
 };
 
 struct hfi_msg_session_fbd_compressed_pkt {
@@ -176,7 +175,7 @@ struct hfi_msg_session_fbd_compressed_pkt {
 	u32 picture_type;
 	u32 packet_buffer;
 	u32 extradata_buffer;
-	u32 data[];
+	u32 data[0];
 };
 
 struct hfi_msg_session_fbd_uncompressed_plane0_pkt {
@@ -203,7 +202,7 @@ struct hfi_msg_session_fbd_uncompressed_plane0_pkt {
 	u32 picture_type;
 	u32 packet_buffer;
 	u32 extradata_buffer;
-	u32 data[];
+	u32 data[0];
 };
 
 struct hfi_msg_session_fbd_uncompressed_plane1_pkt {
@@ -212,7 +211,7 @@ struct hfi_msg_session_fbd_uncompressed_plane1_pkt {
 	u32 filled_len;
 	u32 offset;
 	u32 packet_buffer2;
-	u32 data[];
+	u32 data[0];
 };
 
 struct hfi_msg_session_fbd_uncompressed_plane2_pkt {
@@ -221,7 +220,7 @@ struct hfi_msg_session_fbd_uncompressed_plane2_pkt {
 	u32 filled_len;
 	u32 offset;
 	u32 packet_buffer3;
-	u32 data[];
+	u32 data[0];
 };
 
 struct hfi_msg_session_parse_sequence_header_done_pkt {
@@ -234,8 +233,7 @@ struct hfi_msg_session_parse_sequence_header_done_pkt {
 struct hfi_msg_session_property_info_pkt {
 	struct hfi_session_hdr_pkt shdr;
 	u32 num_properties;
-	u32 property;
-	u8 data[];
+	u32 data[1];
 };
 
 struct hfi_msg_session_release_resources_done_pkt {

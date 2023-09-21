@@ -3,7 +3,7 @@
 // Copyright (c) 2011-2014 Samsung Electronics Co., Ltd.
 //		http://www.samsung.com
 //
-// Exynos - Suspend support
+// EXYNOS - Suspend support
 //
 // Based on arch/arm/mach-s3c2410/pm.c
 // Copyright (c) 2006 Simtec Electronics
@@ -667,7 +667,7 @@ void __init exynos_pm_init(void)
 		return;
 	}
 
-	if (WARN_ON(!of_property_read_bool(np, "interrupt-controller"))) {
+	if (WARN_ON(!of_find_property(np, "interrupt-controller", NULL))) {
 		pr_warn("Outdated DT detected, suspend/resume will NOT work\n");
 		of_node_put(np);
 		return;

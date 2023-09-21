@@ -246,7 +246,7 @@ int v4l2_mc_create_media_graph(struct media_device *mdev)
 			pad_sink = media_get_pad_index(decoder, true,
 						       PAD_SIGNAL_ANALOG);
 			if (pad_sink < 0) {
-				dev_warn(mdev->dev, "couldn't get decoder analog pad sink\n");
+				dev_warn(mdev->dev, "couldn't get tuner analog pad sink\n");
 				return -EINVAL;
 			}
 			ret = media_create_pad_link(entity, 0, decoder,
@@ -309,97 +309,6 @@ int v4l_vb2q_enable_media_source(struct vb2_queue *q)
 }
 EXPORT_SYMBOL_GPL(v4l_vb2q_enable_media_source);
 
-int v4l2_create_fwnode_links_to_pad(struct v4l2_subdev *src_sd,
-				    struct media_pad *sink, u32 flags)
-{
-	struct fwnode_handle *endpoint;
-
-	if (!(sink->flags & MEDIA_PAD_FL_SINK))
-		return -EINVAL;
-
-	fwnode_graph_for_each_endpoint(dev_fwnode(src_sd->dev), endpoint) {
-		struct fwnode_handle *remote_ep;
-		int src_idx, sink_idx, ret;
-		struct media_pad *src;
-
-		src_idx = media_entity_get_fwnode_pad(&src_sd->entity,
-						      endpoint,
-						      MEDIA_PAD_FL_SOURCE);
-		if (src_idx < 0)
-			continue;
-
-		remote_ep = fwnode_graph_get_remote_endpoint(endpoint);
-		if (!remote_ep)
-			continue;
-
-		/*
-		 * ask the sink to verify it owns the remote endpoint,
-		 * and translate to a sink pad.
-		 */
-		sink_idx = media_entity_get_fwnode_pad(sink->entity,
-						       remote_ep,
-						       MEDIA_PAD_FL_SINK);
-		fwnode_handle_put(remote_ep);
-
-		if (sink_idx < 0 || sink_idx != sink->index)
-			continue;
-
-		/*
-		 * the source endpoint corresponds to one of its source pads,
-		 * the source endpoint connects to an endpoint at the sink
-		 * entity, and the sink endpoint corresponds to the sink
-		 * pad requested, so we have found an endpoint connection
-		 * that works, create the media link for it.
-		 */
-
-		src = &src_sd->entity.pads[src_idx];
-
-		/* skip if link already exists */
-		if (media_entity_find_link(src, sink))
-			continue;
-
-		dev_dbg(src_sd->dev, "creating link %s:%d -> %s:%d\n",
-			src_sd->entity.name, src_idx,
-			sink->entity->name, sink_idx);
-
-		ret = media_create_pad_link(&src_sd->entity, src_idx,
-					    sink->entity, sink_idx, flags);
-		if (ret) {
-			dev_err(src_sd->dev,
-				"link %s:%d -> %s:%d failed with %d\n",
-				src_sd->entity.name, src_idx,
-				sink->entity->name, sink_idx, ret);
-
-			fwnode_handle_put(endpoint);
-			return ret;
-		}
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(v4l2_create_fwnode_links_to_pad);
-
-int v4l2_create_fwnode_links(struct v4l2_subdev *src_sd,
-			     struct v4l2_subdev *sink_sd)
-{
-	unsigned int i;
-
-	for (i = 0; i < sink_sd->entity.num_pads; i++) {
-		struct media_pad *pad = &sink_sd->entity.pads[i];
-		int ret;
-
-		if (!(pad->flags & MEDIA_PAD_FL_SINK))
-			continue;
-
-		ret = v4l2_create_fwnode_links_to_pad(src_sd, pad, 0);
-		if (ret)
-			return ret;
-	}
-
-	return 0;
-}
-EXPORT_SYMBOL_GPL(v4l2_create_fwnode_links);
-
 /* -----------------------------------------------------------------------------
  * Pipeline power management
  *
@@ -412,7 +321,7 @@ EXPORT_SYMBOL_GPL(v4l2_create_fwnode_links);
  * use_count field stores the total number of users of all video device nodes
  * in the pipeline.
  *
- * The v4l2_pipeline_pm_{get, put}() functions must be called in the open() and
+ * The v4l2_pipeline_pm_use() function must be called in the open() and
  * close() handlers of video device nodes. It increments or decrements the use
  * count of all subdev entities in the pipeline.
  *
@@ -514,7 +423,7 @@ static int pipeline_pm_power(struct media_entity *entity, int change,
 	return ret;
 }
 
-static int v4l2_pipeline_pm_use(struct media_entity *entity, unsigned int use)
+int v4l2_pipeline_pm_use(struct media_entity *entity, int use)
 {
 	struct media_device *mdev = entity->graph_obj.mdev;
 	int change = use ? 1 : -1;
@@ -535,19 +444,7 @@ static int v4l2_pipeline_pm_use(struct media_entity *entity, unsigned int use)
 
 	return ret;
 }
-
-int v4l2_pipeline_pm_get(struct media_entity *entity)
-{
-	return v4l2_pipeline_pm_use(entity, 1);
-}
-EXPORT_SYMBOL_GPL(v4l2_pipeline_pm_get);
-
-void v4l2_pipeline_pm_put(struct media_entity *entity)
-{
-	/* Powering off entities shouldn't fail. */
-	WARN_ON(v4l2_pipeline_pm_use(entity, 0));
-}
-EXPORT_SYMBOL_GPL(v4l2_pipeline_pm_put);
+EXPORT_SYMBOL_GPL(v4l2_pipeline_pm_use);
 
 int v4l2_pipeline_link_notify(struct media_link *link, u32 flags,
 			      unsigned int notification)

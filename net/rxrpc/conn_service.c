@@ -67,7 +67,7 @@ static void rxrpc_publish_service_conn(struct rxrpc_peer *peer,
 	struct rxrpc_conn_proto k = conn->proto;
 	struct rb_node **pp, *parent;
 
-	write_seqlock(&peer->service_conn_lock);
+	write_seqlock_bh(&peer->service_conn_lock);
 
 	pp = &peer->service_conns.rb_node;
 	parent = NULL;
@@ -88,14 +88,14 @@ static void rxrpc_publish_service_conn(struct rxrpc_peer *peer,
 	rb_insert_color(&conn->service_node, &peer->service_conns);
 conn_published:
 	set_bit(RXRPC_CONN_IN_SERVICE_CONNS, &conn->flags);
-	write_sequnlock(&peer->service_conn_lock);
+	write_sequnlock_bh(&peer->service_conn_lock);
 	_leave(" = %d [new]", conn->debug_id);
 	return;
 
 found_extant_conn:
-	if (refcount_read(&cursor->ref) == 0)
+	if (atomic_read(&cursor->usage) == 0)
 		goto replace_old_connection;
-	write_sequnlock(&peer->service_conn_lock);
+	write_sequnlock_bh(&peer->service_conn_lock);
 	/* We should not be able to get here.  rxrpc_incoming_connection() is
 	 * called in a non-reentrant context, so there can't be a race to
 	 * insert a new connection.
@@ -119,14 +119,14 @@ replace_old_connection:
 struct rxrpc_connection *rxrpc_prealloc_service_connection(struct rxrpc_net *rxnet,
 							   gfp_t gfp)
 {
-	struct rxrpc_connection *conn = rxrpc_alloc_connection(rxnet, gfp);
+	struct rxrpc_connection *conn = rxrpc_alloc_connection(gfp);
 
 	if (conn) {
 		/* We maintain an extra ref on the connection whilst it is on
 		 * the rxrpc_connections list.
 		 */
 		conn->state = RXRPC_CONN_SERVICE_PREALLOC;
-		refcount_set(&conn->ref, 2);
+		atomic_set(&conn->usage, 2);
 
 		atomic_inc(&rxnet->nr_conns);
 		write_lock(&rxnet->conn_lock);
@@ -134,7 +134,9 @@ struct rxrpc_connection *rxrpc_prealloc_service_connection(struct rxrpc_net *rxn
 		list_add_tail(&conn->proc_link, &rxnet->conn_proc_list);
 		write_unlock(&rxnet->conn_lock);
 
-		rxrpc_see_connection(conn, rxrpc_conn_new_service);
+		trace_rxrpc_conn(conn->debug_id, rxrpc_conn_new_service,
+				 atomic_read(&conn->usage),
+				 __builtin_return_address(0));
 	}
 
 	return conn;
@@ -147,6 +149,7 @@ struct rxrpc_connection *rxrpc_prealloc_service_connection(struct rxrpc_net *rxn
 void rxrpc_new_incoming_connection(struct rxrpc_sock *rx,
 				   struct rxrpc_connection *conn,
 				   const struct rxrpc_security *sec,
+				   struct key *key,
 				   struct sk_buff *skb)
 {
 	struct rxrpc_skb_priv *sp = rxrpc_skb(skb);
@@ -155,11 +158,12 @@ void rxrpc_new_incoming_connection(struct rxrpc_sock *rx,
 
 	conn->proto.epoch	= sp->hdr.epoch;
 	conn->proto.cid		= sp->hdr.cid & RXRPC_CIDMASK;
-	conn->orig_service_id	= sp->hdr.serviceId;
+	conn->params.service_id	= sp->hdr.serviceId;
 	conn->service_id	= sp->hdr.serviceId;
 	conn->security_ix	= sp->hdr.securityIndex;
 	conn->out_clientflag	= 0;
 	conn->security		= sec;
+	conn->server_key	= key_get(key);
 	if (conn->security_ix)
 		conn->state	= RXRPC_CONN_SERVICE_UNSECURED;
 	else
@@ -173,10 +177,10 @@ void rxrpc_new_incoming_connection(struct rxrpc_sock *rx,
 	    conn->service_id == rx->service_upgrade.from)
 		conn->service_id = rx->service_upgrade.to;
 
-	atomic_set(&conn->active, 1);
-
 	/* Make the connection a target for incoming packets. */
-	rxrpc_publish_service_conn(conn->peer, conn);
+	rxrpc_publish_service_conn(conn->params.peer, conn);
+
+	_net("CONNECTION new %d {%x}", conn->debug_id, conn->proto.cid);
 }
 
 /*
@@ -185,10 +189,10 @@ void rxrpc_new_incoming_connection(struct rxrpc_sock *rx,
  */
 void rxrpc_unpublish_service_conn(struct rxrpc_connection *conn)
 {
-	struct rxrpc_peer *peer = conn->peer;
+	struct rxrpc_peer *peer = conn->params.peer;
 
-	write_seqlock(&peer->service_conn_lock);
+	write_seqlock_bh(&peer->service_conn_lock);
 	if (test_and_clear_bit(RXRPC_CONN_IN_SERVICE_CONNS, &conn->flags))
 		rb_erase(&conn->service_node, &peer->service_conns);
-	write_sequnlock(&peer->service_conn_lock);
+	write_sequnlock_bh(&peer->service_conn_lock);
 }

@@ -30,16 +30,15 @@
 #include <linux/init.h>
 #include <linux/ptrace.h>
 #include <linux/kallsyms.h>
-#include <linux/extable.h>
 
 #include <asm/setup.h>
 #include <asm/fpu.h>
 #include <linux/uaccess.h>
 #include <asm/traps.h>
+#include <asm/pgalloc.h>
 #include <asm/machdep.h>
-#include <asm/processor.h>
 #include <asm/siginfo.h>
-#include <asm/tlbflush.h>
+
 
 static const char *vec_names[] = {
 	[VEC_RESETSP]	= "RESET SP",
@@ -183,8 +182,9 @@ static inline void access_error060 (struct frame *fp)
 static inline unsigned long probe040(int iswrite, unsigned long addr, int wbs)
 {
 	unsigned long mmusr;
+	mm_segment_t old_fs = get_fs();
 
-	set_fc(wbs);
+	set_fs(MAKE_MM_SEG(wbs));
 
 	if (iswrite)
 		asm volatile (".chip 68040; ptestw (%0); .chip 68k" : : "a" (addr));
@@ -193,7 +193,7 @@ static inline unsigned long probe040(int iswrite, unsigned long addr, int wbs)
 
 	asm volatile (".chip 68040; movec %%mmusr,%0; .chip 68k" : "=r" (mmusr));
 
-	set_fc(USER_DATA);
+	set_fs(old_fs);
 
 	return mmusr;
 }
@@ -202,8 +202,10 @@ static inline int do_040writeback1(unsigned short wbs, unsigned long wba,
 				   unsigned long wbd)
 {
 	int res = 0;
+	mm_segment_t old_fs = get_fs();
 
-	set_fc(wbs);
+	/* set_fs can not be moved, otherwise put_user() may oops */
+	set_fs(MAKE_MM_SEG(wbs));
 
 	switch (wbs & WBSIZ_040) {
 	case BA_SIZE_BYTE:
@@ -217,7 +219,9 @@ static inline int do_040writeback1(unsigned short wbs, unsigned long wba,
 		break;
 	}
 
-	set_fc(USER_DATA);
+	/* set_fs can not be moved, otherwise put_user() may oops */
+	set_fs(old_fs);
+
 
 	pr_debug("do_040writeback1, res=%d\n", res);
 
@@ -546,8 +550,7 @@ static inline void bus_error030 (struct frame *fp)
 			errorcode |= 2;
 
 		if (mmusr & (MMU_I | MMU_WP)) {
-			/* We might have an exception table for this PC */
-			if (ssw & 4 && !search_exception_tables(fp->ptregs.pc)) {
+			if (ssw & 4) {
 				pr_err("Data %s fault at %#010lx in %s (pc=%#lx)\n",
 				       ssw & RW ? "read" : "write",
 				       fp->un.fmtb.daddr,
@@ -808,13 +811,13 @@ asmlinkage void buserr_c(struct frame *fp)
 
 static int kstack_depth_to_print = 48;
 
-static void show_trace(unsigned long *stack, const char *loglvl)
+void show_trace(unsigned long *stack)
 {
 	unsigned long *endstack;
 	unsigned long addr;
 	int i;
 
-	printk("%sCall Trace:", loglvl);
+	pr_info("Call Trace:");
 	addr = (unsigned long)stack + THREAD_SIZE - 1;
 	endstack = (unsigned long *)(addr & -THREAD_SIZE);
 	i = 0;
@@ -843,6 +846,7 @@ static void show_trace(unsigned long *stack, const char *loglvl)
 void show_registers(struct pt_regs *regs)
 {
 	struct frame *fp = (struct frame *)regs;
+	mm_segment_t old_fs = get_fs();
 	u16 c, *cp;
 	unsigned long addr;
 	int i;
@@ -912,12 +916,13 @@ void show_registers(struct pt_regs *regs)
 	default:
 		pr_cont("\n");
 	}
-	show_stack(NULL, (unsigned long *)addr, KERN_INFO);
+	show_stack(NULL, (unsigned long *)addr);
 
 	pr_info("Code:");
+	set_fs(KERNEL_DS);
 	cp = (u16 *)regs->pc;
 	for (i = -8; i < 16; i++) {
-		if (get_kernel_nofault(c, cp + i) && i >= 0) {
+		if (get_user(c, cp + i) && i >= 0) {
 			pr_cont(" Bad PC value.");
 			break;
 		}
@@ -926,11 +931,11 @@ void show_registers(struct pt_regs *regs)
 		else
 			pr_cont(" <%04x>", c);
 	}
+	set_fs(old_fs);
 	pr_cont("\n");
 }
 
-void show_stack(struct task_struct *task, unsigned long *stack,
-		const char *loglvl)
+void show_stack(struct task_struct *task, unsigned long *stack)
 {
 	unsigned long *p;
 	unsigned long *endstack;
@@ -944,7 +949,7 @@ void show_stack(struct task_struct *task, unsigned long *stack,
 	}
 	endstack = (unsigned long *)(((unsigned long)stack + THREAD_SIZE - 1) & -THREAD_SIZE);
 
-	printk("%sStack from %08lx:", loglvl, (unsigned long)stack);
+	pr_info("Stack from %08lx:", (unsigned long)stack);
 	p = stack;
 	for (i = 0; i < kstack_depth_to_print; i++) {
 		if (p + 1 > endstack)
@@ -954,7 +959,7 @@ void show_stack(struct task_struct *task, unsigned long *stack,
 		pr_cont(" %08lx", *p++);
 	}
 	pr_cont("\n");
-	show_trace(stack, loglvl);
+	show_trace(stack);
 }
 
 /*
@@ -1134,7 +1139,7 @@ void die_if_kernel (char *str, struct pt_regs *fp, int nr)
 	pr_crit("%s: %08x\n", str, nr);
 	show_registers(fp);
 	add_taint(TAINT_DIE, LOCKDEP_NOW_UNRELIABLE);
-	make_task_dead(SIGSEGV);
+	do_exit(SIGSEGV);
 }
 
 asmlinkage void set_esp0(unsigned long ssp)
@@ -1148,7 +1153,7 @@ asmlinkage void set_esp0(unsigned long ssp)
  */
 asmlinkage void fpsp040_die(void)
 {
-	force_exit_sig(SIGSEGV);
+	do_exit(SIGSEGV);
 }
 
 #ifdef CONFIG_M68KFPU_EMU

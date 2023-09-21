@@ -79,7 +79,7 @@
 		pinctrl-names = "default";
 		pinctrl-0 = <&led_pins_olinuxino>;
 
-		led {
+		green {
 			label = "a10s-olinuxino-micro:green:usr";
 			gpios = <&pio 4 3 GPIO_ACTIVE_HIGH>;
 			default-state = "on";
@@ -130,7 +130,7 @@
 &i2c1 {
 	status = "okay";
 
-	eeprom@50 {
+	at24@50 {
 		compatible = "atmel,24c16";
 		pagesize = <16>;
 		reg = <0x50>;

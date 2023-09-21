@@ -9,6 +9,7 @@
  */
 
 #define SCHED_CPUFREQ_IOWAIT	(1U << 0)
+#define SCHED_CPUFREQ_MIGRATION	(1U << 1)
 
 #ifdef CONFIG_CPU_FREQ
 struct cpufreq_policy;
@@ -26,12 +27,7 @@ bool cpufreq_this_cpu_can_update(struct cpufreq_policy *policy);
 static inline unsigned long map_util_freq(unsigned long util,
 					unsigned long freq, unsigned long cap)
 {
-	return freq * util / cap;
-}
-
-static inline unsigned long map_util_perf(unsigned long util)
-{
-	return util + (util >> 2);
+	return (freq + (freq >> 2)) * util / cap;
 }
 #endif /* CONFIG_CPU_FREQ */
 

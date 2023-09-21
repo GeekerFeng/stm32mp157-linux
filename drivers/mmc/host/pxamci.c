@@ -31,10 +31,10 @@
 #include <linux/gfp.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
-#include <linux/soc/pxa/cpu.h>
 
 #include <linux/sizes.h>
 
+#include <mach/hardware.h>
 #include <linux/platform_data/mmc-pxamci.h>
 
 #include "pxamci.h"
@@ -648,7 +648,7 @@ static int pxamci_probe(struct platform_device *pdev)
 
 	ret = pxamci_of_init(pdev, mmc);
 	if (ret)
-		goto out;
+		return ret;
 
 	host = mmc_priv(mmc);
 	host->mmc = mmc;
@@ -672,7 +672,7 @@ static int pxamci_probe(struct platform_device *pdev)
 
 	ret = pxamci_init_ocr(host);
 	if (ret < 0)
-		goto out;
+		return ret;
 
 	mmc->caps = 0;
 	host->cmdat = 0;
@@ -710,19 +710,17 @@ static int pxamci_probe(struct platform_device *pdev)
 
 	platform_set_drvdata(pdev, mmc);
 
-	host->dma_chan_rx = dma_request_chan(dev, "rx");
-	if (IS_ERR(host->dma_chan_rx)) {
+	host->dma_chan_rx = dma_request_slave_channel(dev, "rx");
+	if (host->dma_chan_rx == NULL) {
 		dev_err(dev, "unable to request rx dma channel\n");
-		ret = PTR_ERR(host->dma_chan_rx);
-		host->dma_chan_rx = NULL;
+		ret = -ENODEV;
 		goto out;
 	}
 
-	host->dma_chan_tx = dma_request_chan(dev, "tx");
-	if (IS_ERR(host->dma_chan_tx)) {
+	host->dma_chan_tx = dma_request_slave_channel(dev, "tx");
+	if (host->dma_chan_tx == NULL) {
 		dev_err(dev, "unable to request tx dma channel\n");
-		ret = PTR_ERR(host->dma_chan_tx);
-		host->dma_chan_tx = NULL;
+		ret = -ENODEV;
 		goto out;
 	}
 
@@ -731,13 +729,12 @@ static int pxamci_probe(struct platform_device *pdev)
 
 		host->power = devm_gpiod_get_optional(dev, "power", GPIOD_OUT_LOW);
 		if (IS_ERR(host->power)) {
-			ret = PTR_ERR(host->power);
 			dev_err(dev, "Failed requesting gpio_power\n");
 			goto out;
 		}
 
 		/* FIXME: should we pass detection delay to debounce? */
-		ret = mmc_gpiod_request_cd(mmc, "cd", 0, false, 0);
+		ret = mmc_gpiod_request_cd(mmc, "cd", 0, false, 0, NULL);
 		if (ret && ret != -ENOENT) {
 			dev_err(dev, "Failed requesting gpio_cd\n");
 			goto out;
@@ -746,7 +743,7 @@ static int pxamci_probe(struct platform_device *pdev)
 		if (!host->pdata->gpio_card_ro_invert)
 			mmc->caps2 |= MMC_CAP2_RO_ACTIVE_HIGH;
 
-		ret = mmc_gpiod_request_ro(mmc, "wp", 0, 0);
+		ret = mmc_gpiod_request_ro(mmc, "wp", 0, 0, NULL);
 		if (ret && ret != -ENOENT) {
 			dev_err(dev, "Failed requesting gpio_ro\n");
 			goto out;
@@ -763,12 +760,7 @@ static int pxamci_probe(struct platform_device *pdev)
 			dev_warn(dev, "gpio_ro and get_ro() both defined\n");
 	}
 
-	ret = mmc_add_host(mmc);
-	if (ret) {
-		if (host->pdata && host->pdata->exit)
-			host->pdata->exit(dev, mmc);
-		goto out;
-	}
+	mmc_add_host(mmc);
 
 	return 0;
 
@@ -817,7 +809,6 @@ static struct platform_driver pxamci_driver = {
 	.remove		= pxamci_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(pxa_mmc_dt_ids),
 	},
 };

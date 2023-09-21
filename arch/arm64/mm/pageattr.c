@@ -8,10 +8,9 @@
 #include <linux/sched.h>
 #include <linux/vmalloc.h>
 
-#include <asm/cacheflush.h>
+#include <asm/pgtable.h>
 #include <asm/set_memory.h>
 #include <asm/tlbflush.h>
-#include <asm/kfence.h>
 
 struct page_change_data {
 	pgprot_t set_mask;
@@ -19,19 +18,6 @@ struct page_change_data {
 };
 
 bool rodata_full __ro_after_init = IS_ENABLED(CONFIG_RODATA_FULL_DEFAULT_ENABLED);
-
-bool can_set_direct_map(void)
-{
-	/*
-	 * rodata_full and DEBUG_PAGEALLOC require linear map to be
-	 * mapped at page granularity, so that it is possible to
-	 * protect/unprotect single pages.
-	 *
-	 * KFENCE pool requires page-granular mapping if initialized late.
-	 */
-	return (rodata_enabled && rodata_full) || debug_pagealloc_enabled() ||
-		arm64_kfence_can_set_direct_map();
-}
 
 static int change_page_range(pte_t *ptep, unsigned long addr, void *data)
 {
@@ -68,7 +54,7 @@ static int change_memory_common(unsigned long addr, int numpages,
 				pgprot_t set_mask, pgprot_t clear_mask)
 {
 	unsigned long start = addr;
-	unsigned long size = PAGE_SIZE * numpages;
+	unsigned long size = PAGE_SIZE*numpages;
 	unsigned long end = start + size;
 	struct vm_struct *area;
 	int i;
@@ -94,7 +80,7 @@ static int change_memory_common(unsigned long addr, int numpages,
 	 */
 	area = find_vm_area((void *)addr);
 	if (!area ||
-	    end > (unsigned long)kasan_reset_tag(area->addr) + area->size ||
+	    end > (unsigned long)area->addr + area->size ||
 	    !(area->flags & VM_ALLOC))
 		return -EINVAL;
 
@@ -105,8 +91,7 @@ static int change_memory_common(unsigned long addr, int numpages,
 	 * If we are manipulating read-only permissions, apply the same
 	 * change to the linear mapping of the pages that back this VM area.
 	 */
-	if (rodata_enabled &&
-	    rodata_full && (pgprot_val(set_mask) == PTE_RDONLY ||
+	if (rodata_full && (pgprot_val(set_mask) == PTE_RDONLY ||
 			    pgprot_val(clear_mask) == PTE_RDONLY)) {
 		for (i = 0; i < area->nr_pages; i++) {
 			__change_memory_common((u64)page_address(area->pages[i]),
@@ -141,13 +126,13 @@ int set_memory_nx(unsigned long addr, int numpages)
 {
 	return change_memory_common(addr, numpages,
 					__pgprot(PTE_PXN),
-					__pgprot(PTE_MAYBE_GP));
+					__pgprot(0));
 }
 
 int set_memory_x(unsigned long addr, int numpages)
 {
 	return change_memory_common(addr, numpages,
-					__pgprot(PTE_MAYBE_GP),
+					__pgprot(0),
 					__pgprot(PTE_PXN));
 }
 
@@ -170,7 +155,7 @@ int set_direct_map_invalid_noflush(struct page *page)
 		.clear_mask = __pgprot(PTE_VALID),
 	};
 
-	if (!can_set_direct_map())
+	if (!rodata_full)
 		return 0;
 
 	return apply_to_page_range(&init_mm,
@@ -185,7 +170,7 @@ int set_direct_map_default_noflush(struct page *page)
 		.clear_mask = __pgprot(PTE_RDONLY),
 	};
 
-	if (!can_set_direct_map())
+	if (!rodata_full)
 		return 0;
 
 	return apply_to_page_range(&init_mm,
@@ -193,19 +178,18 @@ int set_direct_map_default_noflush(struct page *page)
 				   PAGE_SIZE, change_page_range, &data);
 }
 
-#ifdef CONFIG_DEBUG_PAGEALLOC
 void __kernel_map_pages(struct page *page, int numpages, int enable)
 {
-	if (!can_set_direct_map())
+	if (!debug_pagealloc_enabled() && !rodata_full)
 		return;
 
 	set_memory_valid((unsigned long)page_address(page), numpages, enable);
 }
-#endif /* CONFIG_DEBUG_PAGEALLOC */
 
 /*
  * This function is used to determine if a linear map page has been marked as
- * not-valid. Walk the page table and check the PTE_VALID bit.
+ * not-valid. Walk the page table and check the PTE_VALID bit. This is based
+ * on kern_addr_valid(), which almost does what we need.
  *
  * Because this is only called on the kernel linear map,  p?d_sect() implies
  * p?d_present(). When debug_pagealloc is enabled, sections mappings are
@@ -214,24 +198,19 @@ void __kernel_map_pages(struct page *page, int numpages, int enable)
 bool kernel_page_present(struct page *page)
 {
 	pgd_t *pgdp;
-	p4d_t *p4dp;
 	pud_t *pudp, pud;
 	pmd_t *pmdp, pmd;
 	pte_t *ptep;
 	unsigned long addr = (unsigned long)page_address(page);
 
-	if (!can_set_direct_map())
+	if (!debug_pagealloc_enabled() && !rodata_full)
 		return true;
 
 	pgdp = pgd_offset_k(addr);
 	if (pgd_none(READ_ONCE(*pgdp)))
 		return false;
 
-	p4dp = p4d_offset(pgdp, addr);
-	if (p4d_none(READ_ONCE(*p4dp)))
-		return false;
-
-	pudp = pud_offset(p4dp, addr);
+	pudp = pud_offset(pgdp, addr);
 	pud = READ_ONCE(*pudp);
 	if (pud_none(pud))
 		return false;

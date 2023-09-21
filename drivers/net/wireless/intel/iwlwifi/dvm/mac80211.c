@@ -2,10 +2,15 @@
 /******************************************************************************
  *
  * Copyright(c) 2003 - 2014 Intel Corporation. All rights reserved.
- * Copyright (C) 2018 - 2019, 2022 Intel Corporation
+ * Copyright (C) 2018 - 2019 Intel Corporation
  *
  * Portions of this file are derived from the ipw3945 project, as well
  * as portions of the ieee80211 subsystem header files.
+ *
+ * Contact Information:
+ *  Intel Linux Wireless <linuxwifi@intel.com>
+ * Intel Corporation, 5200 N.E. Elam Young Parkway, Hillsboro, OR 97124-6497
+ *
  *****************************************************************************/
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -195,7 +200,6 @@ int iwlagn_mac_setup_register(struct iwl_priv *priv,
 	iwl_leds_init(priv);
 
 	wiphy_ext_feature_set(hw->wiphy, NL80211_EXT_FEATURE_CQM_RSSI_LIST);
-	wiphy_ext_feature_set(hw->wiphy, NL80211_EXT_FEATURE_EXT_KEY_ID);
 
 	ret = ieee80211_register_hw(priv->hw);
 	if (ret) {
@@ -299,7 +303,7 @@ static int iwlagn_mac_start(struct ieee80211_hw *hw)
 
 	priv->is_open = 1;
 	IWL_DEBUG_MAC80211(priv, "leave\n");
-	return ret;
+	return 0;
 }
 
 static void iwlagn_mac_stop(struct ieee80211_hw *hw)
@@ -614,7 +618,7 @@ static int iwlagn_mac_set_key(struct ieee80211_hw *hw, enum set_key_cmd cmd,
 	switch (key->cipher) {
 	case WLAN_CIPHER_SUITE_TKIP:
 		key->flags |= IEEE80211_KEY_FLAG_GENERATE_MMIC;
-		fallthrough;
+		/* fall through */
 	case WLAN_CIPHER_SUITE_CCMP:
 		key->flags |= IEEE80211_KEY_FLAG_GENERATE_IV;
 		break;
@@ -1153,8 +1157,7 @@ static int iwlagn_mac_set_tim(struct ieee80211_hw *hw,
 }
 
 static int iwlagn_mac_conf_tx(struct ieee80211_hw *hw,
-			      struct ieee80211_vif *vif,
-			      unsigned int link_id, u16 queue,
+			      struct ieee80211_vif *vif, u16 queue,
 			      const struct ieee80211_tx_queue_params *params)
 {
 	struct iwl_priv *priv = IWL_MAC80211_GET_DVM(hw);
@@ -1571,7 +1574,6 @@ static void iwlagn_mac_sta_notify(struct ieee80211_hw *hw,
 
 const struct ieee80211_ops iwlagn_hw_ops = {
 	.tx = iwlagn_mac_tx,
-	.wake_tx_queue = ieee80211_handle_wake_tx_queue,
 	.start = iwlagn_mac_start,
 	.stop = iwlagn_mac_stop,
 #ifdef CONFIG_PM_SLEEP

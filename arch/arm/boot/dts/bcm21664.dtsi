@@ -1,5 +1,15 @@
-// SPDX-License-Identifier: GPL-2.0-only
-// Copyright (C) 2014 Broadcom Corporation
+/*
+ * Copyright (C) 2014 Broadcom Corporation
+ *
+ * This program is free software; you can redistribute it and/or
+ * modify it under the terms of the GNU General Public License as
+ * published by the Free Software Foundation version 2.
+ *
+ * This program is distributed "as is" WITHOUT ANY WARRANTY of any
+ * kind, whether express or implied; without even the implied warranty
+ * of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ */
 
 #include <dt-bindings/interrupt-controller/arm-gic.h>
 #include <dt-bindings/interrupt-controller/irq.h>
@@ -17,7 +27,7 @@
 		bootargs = "console=ttyS0,115200n8";
 	};
 
-	cpus {
+       cpus {
 		#address-cells = <1>;
 		#size-cells = <0>;
 
@@ -50,7 +60,7 @@
 		reg = <0x3404e000 0x400>; /* 1 KiB in SRAM */
 	};
 
-	serial@3e000000 {
+	uart@3e000000 {
 		compatible = "brcm,bcm21664-dw-apb-uart", "snps,dw-apb-uart";
 		status = "disabled";
 		reg = <0x3e000000 0x118>;
@@ -60,7 +70,7 @@
 		reg-io-width = <4>;
 	};
 
-	serial@3e001000 {
+	uart@3e001000 {
 		compatible = "brcm,bcm21664-dw-apb-uart", "snps,dw-apb-uart";
 		status = "disabled";
 		reg = <0x3e001000 0x118>;
@@ -70,7 +80,7 @@
 		reg-io-width = <4>;
 	};
 
-	serial@3e002000 {
+	uart@3e002000 {
 		compatible = "brcm,bcm21664-dw-apb-uart", "snps,dw-apb-uart";
 		status = "disabled";
 		reg = <0x3e002000 0x118>;
@@ -80,7 +90,7 @@
 		reg-io-width = <4>;
 	};
 
-	L2: cache-controller@3ff20000 {
+	L2: l2-cache@3ff20000 {
 		compatible = "arm,pl310-cache";
 		reg = <0x3ff20000 0x1000>;
 		cache-unified;

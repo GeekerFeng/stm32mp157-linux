@@ -1,8 +1,8 @@
-/* SPDX-License-Identifier: GPL-2.0 */
-/*
+// SPDX-License-Identifier: GPL-2.0
+/**
  * debug.h - DesignWare USB3 DRD Controller Debug Header
  *
- * Copyright (C) 2010-2011 Texas Instruments Incorporated - https://www.ti.com
+ * Copyright (C) 2010-2011 Texas Instruments Incorporated - http://www.ti.com
  *
  * Authors: Felipe Balbi <balbi@ti.com>,
  *	    Sebastian Andrzej Siewior <bigeasy@linutronix.de>
@@ -68,12 +68,8 @@ dwc3_gadget_generic_cmd_string(u8 cmd)
 		return "All FIFO Flush";
 	case DWC3_DGCMD_SET_ENDPOINT_NRDY:
 		return "Set Endpoint NRDY";
-	case DWC3_DGCMD_SET_ENDPOINT_PRIME:
-		return "Set Endpoint Prime";
 	case DWC3_DGCMD_RUN_SOC_BUS_LOOPBACK:
 		return "Run SoC Bus Loopback Test";
-	case DWC3_DGCMD_DEV_NOTIFICATION:
-		return "Device Notification";
 	default:
 		return "UNKNOWN";
 	}
@@ -116,7 +112,7 @@ dwc3_gadget_link_string(enum dwc3_link_state link_state)
 	case DWC3_LINK_STATE_RESUME:
 		return "Resume";
 	default:
-		return "UNKNOWN link state";
+		return "UNKNOWN link state\n";
 	}
 }
 
@@ -145,7 +141,7 @@ dwc3_gadget_hs_link_string(enum dwc3_link_state link_state)
 	case DWC3_LINK_STATE_RESUME:
 		return "Resume";
 	default:
-		return "UNKNOWN link state";
+		return "UNKNOWN link state\n";
 	}
 }
 
@@ -223,8 +219,8 @@ static inline const char *dwc3_gadget_event_string(char *str, size_t size,
 		snprintf(str, size, "WakeUp [%s]",
 				dwc3_gadget_link_string(state));
 		break;
-	case DWC3_DEVICE_EVENT_SUSPEND:
-		snprintf(str, size, "Suspend [%s]",
+	case DWC3_DEVICE_EVENT_EOPF:
+		snprintf(str, size, "End-Of-Frame [%s]",
 				dwc3_gadget_link_string(state));
 		break;
 	case DWC3_DEVICE_EVENT_SOF:
@@ -280,7 +276,7 @@ static inline const char *dwc3_ep_event_string(char *str, size_t size,
 		break;
 	case DWC3_DEPEVT_XFERINPROGRESS:
 		scnprintf(str + len, size - len,
-				"Transfer In Progress [%08x] (%c%c%c)",
+				"Transfer In Progress [%d] (%c%c%c)",
 				event->parameters,
 				status & DEPEVT_STATUS_SHORT ? 'S' : 's',
 				status & DEPEVT_STATUS_IOC ? 'I' : 'i',
@@ -288,7 +284,7 @@ static inline const char *dwc3_ep_event_string(char *str, size_t size,
 		break;
 	case DWC3_DEPEVT_XFERNOTREADY:
 		len += scnprintf(str + len, size - len,
-				"Transfer Not Ready [%08x]%s",
+				"Transfer Not Ready [%d]%s",
 				event->parameters,
 				status & DEPEVT_STATUS_TRANSFER_ACTIVE ?
 				" (Active)" : " (Not Active)");
@@ -355,8 +351,8 @@ static inline const char *dwc3_gadget_event_type_string(u8 event)
 		return "Wake-Up";
 	case DWC3_DEVICE_EVENT_HIBER_REQ:
 		return "Hibernation";
-	case DWC3_DEVICE_EVENT_SUSPEND:
-		return "Suspend";
+	case DWC3_DEVICE_EVENT_EOPF:
+		return "End of Periodic Frame";
 	case DWC3_DEVICE_EVENT_SOF:
 		return "Start of Frame";
 	case DWC3_DEVICE_EVENT_ERRATIC_ERROR:
@@ -373,9 +369,7 @@ static inline const char *dwc3_gadget_event_type_string(u8 event)
 static inline const char *dwc3_decode_event(char *str, size_t size, u32 event,
 		u32 ep0state)
 {
-	union dwc3_event evt;
-
-	memcpy(&evt, &event, sizeof(event));
+	const union dwc3_event evt = (union dwc3_event) event;
 
 	if (evt.type.is_devspec)
 		return dwc3_gadget_event_string(str, size, &evt.devt);
@@ -415,15 +409,9 @@ static inline const char *dwc3_gadget_generic_cmd_status_string(int status)
 
 
 #ifdef CONFIG_DEBUG_FS
-extern void dwc3_debugfs_create_endpoint_dir(struct dwc3_ep *dep);
-extern void dwc3_debugfs_remove_endpoint_dir(struct dwc3_ep *dep);
-extern void dwc3_debugfs_init(struct dwc3 *d);
-extern void dwc3_debugfs_exit(struct dwc3 *d);
+extern void dwc3_debugfs_init(struct dwc3 *);
+extern void dwc3_debugfs_exit(struct dwc3 *);
 #else
-static inline void dwc3_debugfs_create_endpoint_dir(struct dwc3_ep *dep)
-{  }
-static inline void dwc3_debugfs_remove_endpoint_dir(struct dwc3_ep *dep)
-{  }
 static inline void dwc3_debugfs_init(struct dwc3 *d)
 {  }
 static inline void dwc3_debugfs_exit(struct dwc3 *d)

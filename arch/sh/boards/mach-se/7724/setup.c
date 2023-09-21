@@ -32,7 +32,6 @@
 #include <linux/smc91x.h>
 #include <linux/usb/r8a66597.h>
 #include <linux/videodev2.h>
-#include <linux/dma-map-ops.h>
 
 #include <mach-se/mach/se7724.h>
 #include <media/drv-intf/renesas-ceu.h>
@@ -305,7 +304,7 @@ static struct asoc_simple_card_info fsi_ak4642_info = {
 	.card		= "FSIA-AK4642",
 	.codec		= "ak4642-codec.0-0012",
 	.platform	= "sh_fsi.0",
-	.daifmt		= SND_SOC_DAIFMT_LEFT_J | SND_SOC_DAIFMT_CBP_CFP,
+	.daifmt		= SND_SOC_DAIFMT_LEFT_J | SND_SOC_DAIFMT_CBM_CFM,
 	.cpu_dai = {
 		.name	= "fsia-dai",
 	},
@@ -966,7 +965,7 @@ static void __init ms7724se_mv_mem_reserve(void)
 	if (!phys)
 		panic("Failed to allocate CEU0 memory\n");
 
-	memblock_phys_free(phys, size);
+	memblock_free(phys, size);
 	memblock_remove(phys, size);
 	ceu0_dma_membase = phys;
 
@@ -974,7 +973,7 @@ static void __init ms7724se_mv_mem_reserve(void)
 	if (!phys)
 		panic("Failed to allocate CEU1 memory\n");
 
-	memblock_phys_free(phys, size);
+	memblock_free(phys, size);
 	memblock_remove(phys, size);
 	ceu1_dma_membase = phys;
 }

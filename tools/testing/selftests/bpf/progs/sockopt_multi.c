@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: GPL-2.0
 #include <netinet/in.h>
 #include <linux/bpf.h>
-#include <bpf/bpf_helpers.h>
+#include "bpf_helpers.h"
 
 char _license[] SEC("license") = "GPL";
+__u32 _version SEC("version") = 1;
 
-SEC("cgroup/getsockopt")
+SEC("cgroup/getsockopt/child")
 int _getsockopt_child(struct bpf_sockopt *ctx)
 {
 	__u8 *optval_end = ctx->optval_end;
@@ -28,7 +29,7 @@ int _getsockopt_child(struct bpf_sockopt *ctx)
 	return 1;
 }
 
-SEC("cgroup/getsockopt")
+SEC("cgroup/getsockopt/parent")
 int _getsockopt_parent(struct bpf_sockopt *ctx)
 {
 	__u8 *optval_end = ctx->optval_end;

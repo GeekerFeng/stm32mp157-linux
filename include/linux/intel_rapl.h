@@ -29,24 +29,21 @@ enum rapl_domain_reg_id {
 	RAPL_DOMAIN_REG_PERF,
 	RAPL_DOMAIN_REG_POLICY,
 	RAPL_DOMAIN_REG_INFO,
-	RAPL_DOMAIN_REG_PL4,
 	RAPL_DOMAIN_REG_MAX,
 };
 
-struct rapl_domain;
+struct rapl_package;
 
 enum rapl_primitives {
 	ENERGY_COUNTER,
 	POWER_LIMIT1,
 	POWER_LIMIT2,
-	POWER_LIMIT4,
 	FW_LOCK,
 
 	PL1_ENABLE,		/* power limit 1, aka long term */
 	PL1_CLAMP,		/* allow frequency to go below OS request */
 	PL2_ENABLE,		/* power limit 2, aka short term, instantaneous */
 	PL2_CLAMP,
-	PL4_ENABLE,		/* power limit 4, aka max peak power */
 
 	TIME_WINDOW1,		/* long term */
 	TIME_WINDOW2,		/* short term */
@@ -58,12 +55,6 @@ enum rapl_primitives {
 	THROTTLED_TIME,
 	PRIORITY_LEVEL,
 
-	PSYS_POWER_LIMIT1,
-	PSYS_POWER_LIMIT2,
-	PSYS_PL1_ENABLE,
-	PSYS_PL2_ENABLE,
-	PSYS_TIME_WINDOW1,
-	PSYS_TIME_WINDOW2,
 	/* below are not raw primitive data */
 	AVERAGE_POWER,
 	NR_RAPL_PRIMITIVES,
@@ -74,7 +65,7 @@ struct rapl_domain_data {
 	unsigned long timestamp;
 };
 
-#define NR_POWER_LIMITS (3)
+#define NR_POWER_LIMITS (2)
 struct rapl_power_limit {
 	struct powercap_zone_constraint *constraint;
 	int prim_id;		/* primitive ID used to enable */
@@ -85,10 +76,8 @@ struct rapl_power_limit {
 
 struct rapl_package;
 
-#define RAPL_DOMAIN_NAME_LENGTH 16
-
 struct rapl_domain {
-	char name[RAPL_DOMAIN_NAME_LENGTH];
+	const char *name;
 	enum rapl_domain_type id;
 	u64 regs[RAPL_DOMAIN_REG_MAX];
 	struct powercap_zone power_zone;
@@ -159,5 +148,8 @@ struct rapl_package {
 struct rapl_package *rapl_find_package_domain(int cpu, struct rapl_if_priv *priv);
 struct rapl_package *rapl_add_package(int cpu, struct rapl_if_priv *priv);
 void rapl_remove_package(struct rapl_package *rp);
+
+int rapl_add_platform_domain(struct rapl_if_priv *priv);
+void rapl_remove_platform_domain(struct rapl_if_priv *priv);
 
 #endif /* __INTEL_RAPL_H__ */

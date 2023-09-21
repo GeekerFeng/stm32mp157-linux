@@ -108,8 +108,6 @@ static const struct regmap_config wm8400_regmap_config = {
 /**
  * wm8400_reset_codec_reg_cache - Reset cached codec registers to
  * their default values.
- *
- * @wm8400: pointer to local driver data structure
  */
 void wm8400_reset_codec_reg_cache(struct wm8400 *wm8400)
 {
@@ -118,7 +116,8 @@ void wm8400_reset_codec_reg_cache(struct wm8400 *wm8400)
 EXPORT_SYMBOL_GPL(wm8400_reset_codec_reg_cache);
 
 #if IS_ENABLED(CONFIG_I2C)
-static int wm8400_i2c_probe(struct i2c_client *i2c)
+static int wm8400_i2c_probe(struct i2c_client *i2c,
+			    const struct i2c_device_id *id)
 {
 	struct wm8400 *wm8400;
 
@@ -145,7 +144,7 @@ static struct i2c_driver wm8400_i2c_driver = {
 	.driver = {
 		.name = "WM8400",
 	},
-	.probe_new = wm8400_i2c_probe,
+	.probe    = wm8400_i2c_probe,
 	.id_table = wm8400_i2c_id,
 };
 #endif

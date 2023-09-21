@@ -92,7 +92,7 @@ static int max5487_spi_probe(struct spi_device *spi)
 	if (!indio_dev)
 		return -ENOMEM;
 
-	spi_set_drvdata(spi, indio_dev);
+	dev_set_drvdata(&spi->dev, indio_dev);
 	data = iio_priv(indio_dev);
 
 	data->spi = spi;
@@ -100,6 +100,7 @@ static int max5487_spi_probe(struct spi_device *spi)
 
 	indio_dev->info = &max5487_info;
 	indio_dev->name = id->name;
+	indio_dev->dev.parent = &spi->dev;
 	indio_dev->modes = INDIO_DIRECT_MODE;
 	indio_dev->channels = max5487_channels;
 	indio_dev->num_channels = ARRAY_SIZE(max5487_channels);
@@ -112,17 +113,14 @@ static int max5487_spi_probe(struct spi_device *spi)
 	return iio_device_register(indio_dev);
 }
 
-static void max5487_spi_remove(struct spi_device *spi)
+static int max5487_spi_remove(struct spi_device *spi)
 {
-	struct iio_dev *indio_dev = spi_get_drvdata(spi);
-	int ret;
+	struct iio_dev *indio_dev = dev_get_drvdata(&spi->dev);
 
 	iio_device_unregister(indio_dev);
 
 	/* save both wiper regs to NV regs */
-	ret = max5487_write_cmd(spi, MAX5487_COPY_AB_TO_NV);
-	if (ret)
-		dev_warn(&spi->dev, "Failed to save wiper regs to NV regs\n");
+	return max5487_write_cmd(spi, MAX5487_COPY_AB_TO_NV);
 }
 
 static const struct spi_device_id max5487_id[] = {

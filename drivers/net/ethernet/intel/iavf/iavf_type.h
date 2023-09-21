@@ -192,6 +192,14 @@ struct iavf_hw {
 	char err_str[16];
 };
 
+struct iavf_driver_version {
+	u8 major_version;
+	u8 minor_version;
+	u8 build_version;
+	u8 subbuild_version;
+	u8 driver_string[32];
+};
+
 /* RX Descriptors */
 union iavf_16byte_rx_desc {
 	struct {
@@ -370,6 +378,7 @@ enum iavf_rx_l2_ptype {
 };
 
 struct iavf_rx_ptype_decoded {
+	u32 ptype:8;
 	u32 known:1;
 	u32 outer_ip:1;
 	u32 outer_ip_ver:1;

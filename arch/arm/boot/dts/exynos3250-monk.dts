@@ -22,23 +22,22 @@
 
 	aliases {
 		i2c7 = &i2c_max77836;
-		mmc0 = &mshc_0;
 	};
 
 	memory@40000000 {
 		device_type = "memory";
-		reg = <0x40000000 0x1ff00000>;
+		reg =  <0x40000000 0x1ff00000>;
 	};
 
 	firmware@205f000 {
 		compatible = "samsung,secure-firmware";
-		reg = <0x0205f000 0x1000>;
+		reg = <0x0205F000 0x1000>;
 	};
 
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
 
-		power-key {
+		power_key {
 			gpios = <&gpx2 7 GPIO_ACTIVE_LOW>;
 			linux,code = <KEY_POWER>;
 			label = "power key";
@@ -58,19 +57,18 @@
 
 	i2c_max77836: i2c-gpio-0 {
 		compatible = "i2c-gpio";
-		sda-gpios = <&gpd0 2 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
-		scl-gpios = <&gpd0 3 (GPIO_ACTIVE_HIGH | GPIO_OPEN_DRAIN)>;
+		gpios = <&gpd0 2 GPIO_ACTIVE_HIGH>, <&gpd0 3 GPIO_ACTIVE_HIGH>;
 		#address-cells = <1>;
 		#size-cells = <0>;
 
-		max77836: pmic@25 {
+		max77836: subpmic@25 {
 			compatible = "maxim,max77836";
 			interrupt-parent = <&gpx1>;
 			interrupts = <5 IRQ_TYPE_NONE>;
 			reg = <0x25>;
 			wakeup-source;
 
-			extcon {
+			muic: max77836-muic {
 				compatible = "maxim,max77836-muic";
 			};
 
@@ -143,7 +141,7 @@
 	assigned-clock-rates = <6000000>;
 
 	thermistor-ap {
-		compatible = "murata,ncp15wb473";
+		compatible = "ntc,ncp15wb473";
 		pullup-uv = <1800000>;
 		pullup-ohm = <100000>;
 		pulldown-ohm = <100000>;
@@ -151,7 +149,7 @@
 	};
 
 	thermistor-battery {
-		compatible = "murata,ncp15wb473";
+		compatible = "ntc,ncp15wb473";
 		pullup-uv = <1800000>;
 		pullup-ohm = <100000>;
 		pulldown-ohm = <100000>;
@@ -163,10 +161,6 @@
 	devfreq-events = <&ppmu_dmc0_3>, <&ppmu_dmc1_3>;
 	vdd-supply = <&buck1_reg>;
 	status = "okay";
-};
-
-&cmu {
-	clocks = <&xusbxti>;
 };
 
 &cpu0 {
@@ -198,10 +192,10 @@
 	samsung,i2c-max-bus-freq = <100000>;
 	status = "okay";
 
-	pmic@66 {
+	s2mps14_pmic@66 {
 		compatible = "samsung,s2mps14-pmic";
 		interrupt-parent = <&gpx0>;
-		interrupts = <7 IRQ_TYPE_LEVEL_LOW>;
+		interrupts = <7 IRQ_TYPE_NONE>;
 		reg = <0x66>;
 		wakeup-source;
 
@@ -439,12 +433,12 @@
 	broken-cd;
 	non-removable;
 	cap-mmc-highspeed;
+	desc-num = <4>;
 	mmc-hs200-1_8v;
 	card-detect-delay = <200>;
 	vmmc-supply = <&vemmc_reg>;
 	clock-frequency = <100000000>;
 	max-frequency = <100000000>;
-	mmc-ddr-1_8v;
 	samsung,dw-mshc-ciu-div = <1>;
 	samsung,dw-mshc-sdr-timing = <0 1>;
 	samsung,dw-mshc-ddr-timing = <1 2>;

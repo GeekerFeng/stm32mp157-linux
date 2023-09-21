@@ -19,7 +19,6 @@ SUB_DIRS = alignment		\
 	   copyloops		\
 	   dscr			\
 	   mm			\
-	   nx-gzip		\
 	   pmu			\
 	   signal		\
 	   primitives		\
@@ -30,10 +29,8 @@ SUB_DIRS = alignment		\
 	   eeh			\
 	   vphn         \
 	   math		\
-	   papr_attributes	\
 	   ptrace	\
-	   security	\
-	   mce
+	   security
 
 endif
 
@@ -45,28 +42,28 @@ $(SUB_DIRS):
 include ../lib.mk
 
 override define RUN_TESTS
-	+@for TARGET in $(SUB_DIRS); do \
+	@for TARGET in $(SUB_DIRS); do \
 		BUILD_TARGET=$(OUTPUT)/$$TARGET;	\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -C $$TARGET run_tests;\
 	done;
 endef
 
 override define INSTALL_RULE
-	+@for TARGET in $(SUB_DIRS); do \
+	@for TARGET in $(SUB_DIRS); do \
 		BUILD_TARGET=$(OUTPUT)/$$TARGET;	\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -C $$TARGET install;\
 	done;
 endef
 
 override define EMIT_TESTS
-	+@for TARGET in $(SUB_DIRS); do \
+	@for TARGET in $(SUB_DIRS); do \
 		BUILD_TARGET=$(OUTPUT)/$$TARGET;	\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -s -C $$TARGET emit_tests;\
 	done;
 endef
 
 override define CLEAN
-	+@for TARGET in $(SUB_DIRS); do \
+	@for TARGET in $(SUB_DIRS); do \
 		BUILD_TARGET=$(OUTPUT)/$$TARGET;	\
 		$(MAKE) OUTPUT=$$BUILD_TARGET -C $$TARGET clean; \
 	done;

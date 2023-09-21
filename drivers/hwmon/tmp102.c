@@ -141,7 +141,7 @@ static umode_t tmp102_is_visible(const void *data, enum hwmon_sensor_types type,
 	}
 }
 
-static const struct hwmon_channel_info * const tmp102_info[] = {
+static const struct hwmon_channel_info *tmp102_info[] = {
 	HWMON_CHANNEL_INFO(chip,
 			   HWMON_C_REGISTER_TZ),
 	HWMON_CHANNEL_INFO(temp,
@@ -189,7 +189,8 @@ static const struct regmap_config tmp102_regmap_config = {
 	.use_single_write = true,
 };
 
-static int tmp102_probe(struct i2c_client *client)
+static int tmp102_probe(struct i2c_client *client,
+			const struct i2c_device_id *id)
 {
 	struct device *dev = &client->dev;
 	struct device *hwmon_dev;
@@ -260,6 +261,7 @@ static int tmp102_probe(struct i2c_client *client)
 	return 0;
 }
 
+#ifdef CONFIG_PM_SLEEP
 static int tmp102_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
@@ -282,8 +284,9 @@ static int tmp102_resume(struct device *dev)
 
 	return err;
 }
+#endif /* CONFIG_PM */
 
-static DEFINE_SIMPLE_DEV_PM_OPS(tmp102_dev_pm_ops, tmp102_suspend, tmp102_resume);
+static SIMPLE_DEV_PM_OPS(tmp102_dev_pm_ops, tmp102_suspend, tmp102_resume);
 
 static const struct i2c_device_id tmp102_id[] = {
 	{ "tmp102", 0 },
@@ -300,8 +303,8 @@ MODULE_DEVICE_TABLE(of, tmp102_of_match);
 static struct i2c_driver tmp102_driver = {
 	.driver.name	= DRIVER_NAME,
 	.driver.of_match_table = of_match_ptr(tmp102_of_match),
-	.driver.pm	= pm_sleep_ptr(&tmp102_dev_pm_ops),
-	.probe_new	= tmp102_probe,
+	.driver.pm	= &tmp102_dev_pm_ops,
+	.probe		= tmp102_probe,
 	.id_table	= tmp102_id,
 };
 

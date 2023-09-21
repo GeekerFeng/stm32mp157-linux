@@ -6,7 +6,6 @@
  */
 
 #include <crypto/algapi.h>
-#include <crypto/internal/cipher.h>
 #include <crypto/internal/skcipher.h>
 #include <linux/err.h>
 #include <linux/init.h>
@@ -62,9 +61,10 @@ static int crypto_ecb_decrypt(struct skcipher_request *req)
 static int crypto_ecb_create(struct crypto_template *tmpl, struct rtattr **tb)
 {
 	struct skcipher_instance *inst;
+	struct crypto_alg *alg;
 	int err;
 
-	inst = skcipher_alloc_instance_simple(tmpl, tb);
+	inst = skcipher_alloc_instance_simple(tmpl, tb, &alg);
 	if (IS_ERR(inst))
 		return PTR_ERR(inst);
 
@@ -76,7 +76,7 @@ static int crypto_ecb_create(struct crypto_template *tmpl, struct rtattr **tb)
 	err = skcipher_register_instance(tmpl, inst);
 	if (err)
 		inst->free(inst);
-
+	crypto_mod_put(alg);
 	return err;
 }
 

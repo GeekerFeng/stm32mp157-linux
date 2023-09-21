@@ -24,6 +24,7 @@
 #include <linux/slab.h>
 #include <linux/usb/ulpi.h>
 #include <linux/pm_runtime.h>
+#include <linux/gpio.h>
 #include <linux/clk.h>
 #include <linux/usb.h>
 #include <linux/usb/hcd.h>
@@ -61,6 +62,11 @@ static inline void ehci_write(void __iomem *base, u32 reg, u32 val)
 	__raw_writel(val, base + reg);
 }
 
+static inline u32 ehci_read(void __iomem *base, u32 reg)
+{
+	return __raw_readl(base + reg);
+}
+
 /* configure so an HC device and id are always provided */
 /* always called with process context; sleeping is OK */
 
@@ -72,7 +78,6 @@ static const struct ehci_driver_overrides ehci_omap_overrides __initconst = {
 
 /**
  * ehci_hcd_omap_probe - initialize TI-based HCDs
- * @pdev: Pointer to this platform device's information
  *
  * Allocates basic resources for this USB host controller, and
  * then invokes the start() method for the HCD associated with it
@@ -215,7 +220,6 @@ static int ehci_hcd_omap_probe(struct platform_device *pdev)
 
 err_pm_runtime:
 	pm_runtime_put_sync(dev);
-	pm_runtime_disable(dev);
 
 err_phy:
 	for (i = 0; i < omap->nports; i++) {
@@ -283,6 +287,8 @@ static int __init ehci_omap_init(void)
 {
 	if (usb_disabled())
 		return -ENODEV;
+
+	pr_info("%s: " DRIVER_DESC "\n", hcd_name);
 
 	ehci_init_driver(&ehci_omap_hc_driver, &ehci_omap_overrides);
 	return platform_driver_register(&ehci_hcd_omap_driver);

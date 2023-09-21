@@ -233,6 +233,7 @@ static const struct snd_soc_dai_ops psc_ac97_digital_ops = {
 static struct snd_soc_dai_driver psc_ac97_dai[] = {
 {
 	.name = "mpc5200-psc-ac97.0",
+	.bus_control = true,
 	.probe	= psc_ac97_probe,
 	.playback = {
 		.stream_name	= "AC97 Playback",
@@ -252,6 +253,7 @@ static struct snd_soc_dai_driver psc_ac97_dai[] = {
 },
 {
 	.name = "mpc5200-psc-ac97.1",
+	.bus_control = true,
 	.playback = {
 		.stream_name	= "AC97 SPDIF",
 		.channels_min   = 1,
@@ -311,11 +313,12 @@ static int psc_ac97_of_probe(struct platform_device *op)
 	return 0;
 }
 
-static void psc_ac97_of_remove(struct platform_device *op)
+static int psc_ac97_of_remove(struct platform_device *op)
 {
 	mpc5200_audio_dma_destroy(op);
 	snd_soc_unregister_component(&op->dev);
 	snd_soc_set_ac97_ops(NULL);
+	return 0;
 }
 
 /* Match table for of_platform binding */
@@ -328,7 +331,7 @@ MODULE_DEVICE_TABLE(of, psc_ac97_match);
 
 static struct platform_driver psc_ac97_driver = {
 	.probe = psc_ac97_of_probe,
-	.remove_new = psc_ac97_of_remove,
+	.remove = psc_ac97_of_remove,
 	.driver = {
 		.name = "mpc5200-psc-ac97",
 		.of_match_table = psc_ac97_match,

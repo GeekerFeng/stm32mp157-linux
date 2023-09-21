@@ -113,7 +113,6 @@ static const struct i2c_device_id da9052_i2c_id[] = {
 	{"da9053-bc", DA9053_BC},
 	{}
 };
-MODULE_DEVICE_TABLE(i2c, da9052_i2c_id);
 
 #ifdef CONFIG_OF
 static const struct of_device_id dialog_dt_ids[] = {
@@ -126,9 +125,9 @@ static const struct of_device_id dialog_dt_ids[] = {
 };
 #endif
 
-static int da9052_i2c_probe(struct i2c_client *client)
+static int da9052_i2c_probe(struct i2c_client *client,
+				       const struct i2c_device_id *id)
 {
-	const struct i2c_device_id *id = i2c_client_get_device_id(client);
 	struct da9052 *da9052;
 	int ret;
 
@@ -155,8 +154,13 @@ static int da9052_i2c_probe(struct i2c_client *client)
 		return ret;
 
 #ifdef CONFIG_OF
-	if (!id)
-		id = of_device_get_match_data(&client->dev);
+	if (!id) {
+		struct device_node *np = client->dev.of_node;
+		const struct of_device_id *deviceid;
+
+		deviceid = of_match_node(dialog_dt_ids, np);
+		id = deviceid->data;
+	}
 #endif
 
 	if (!id) {
@@ -168,15 +172,16 @@ static int da9052_i2c_probe(struct i2c_client *client)
 	return da9052_device_init(da9052, id->driver_data);
 }
 
-static void da9052_i2c_remove(struct i2c_client *client)
+static int da9052_i2c_remove(struct i2c_client *client)
 {
 	struct da9052 *da9052 = i2c_get_clientdata(client);
 
 	da9052_device_exit(da9052);
+	return 0;
 }
 
 static struct i2c_driver da9052_i2c_driver = {
-	.probe_new = da9052_i2c_probe,
+	.probe = da9052_i2c_probe,
 	.remove = da9052_i2c_remove,
 	.id_table = da9052_i2c_id,
 	.driver = {
@@ -209,3 +214,4 @@ module_exit(da9052_i2c_exit);
 
 MODULE_AUTHOR("David Dajun Chen <dchen@diasemi.com>");
 MODULE_DESCRIPTION("I2C driver for Dialog DA9052 PMIC");
+MODULE_LICENSE("GPL");

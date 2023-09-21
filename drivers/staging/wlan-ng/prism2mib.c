@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: (GPL-2.0 OR MPL-1.1)
-/*
+/* src/prism2/driver/prism2mib.c
  *
  * Management request for mibset/mibget
  *
@@ -292,7 +292,7 @@ int prism2mgmt_mibset_mibget(struct wlandevice *wlandev, void *msgp)
 	/*
 	 ** Determine if this is a "mibget" or a "mibset".  If this is a
 	 ** "mibget", then make sure that the MIB may be read.  Otherwise,
-	 ** this is a "mibset" so make sure that the MIB may be written.
+	 ** this is a "mibset" so make make sure that the MIB may be written.
 	 */
 
 	isget = (msg->msgcode == DIDMSG_DOT11REQ_MIBGET);
@@ -668,10 +668,6 @@ static int prism2mib_priv(struct mibrec *mib,
 
 	switch (mib->did) {
 	case DIDMIB_LNX_CONFIGTABLE_RSNAIE: {
-		/*
-		 * This can never work: wpa is on the stack
-		 * and has no bytes allocated in wpa.data.
-		 */
 		struct hfa384x_wpa_data wpa;
 
 		if (isget) {
@@ -679,9 +675,11 @@ static int prism2mib_priv(struct mibrec *mib,
 					       HFA384x_RID_CNFWPADATA,
 					       (u8 *)&wpa,
 					       sizeof(wpa));
-			pstr->len = 0;
+			pstr->len = le16_to_cpu(wpa.datalen);
+			memcpy(pstr->data, wpa.data, pstr->len);
 		} else {
-			wpa.datalen = 0;
+			wpa.datalen = cpu_to_le16(pstr->len);
+			memcpy(wpa.data, pstr->data, pstr->len);
 
 			hfa384x_drvr_setconfig(hw,
 					       HFA384x_RID_CNFWPADATA,

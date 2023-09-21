@@ -17,11 +17,10 @@ struct afs_vlserver *afs_alloc_vlserver(const char *name, size_t name_len,
 	vlserver = kzalloc(struct_size(vlserver, name, name_len + 1),
 			   GFP_KERNEL);
 	if (vlserver) {
-		refcount_set(&vlserver->ref, 1);
+		atomic_set(&vlserver->usage, 1);
 		rwlock_init(&vlserver->lock);
 		init_waitqueue_head(&vlserver->probe_wq);
 		spin_lock_init(&vlserver->probe_lock);
-		vlserver->rtt = UINT_MAX;
 		vlserver->name_len = name_len;
 		vlserver->port = port;
 		memcpy(vlserver->name, name, name_len);
@@ -39,9 +38,13 @@ static void afs_vlserver_rcu(struct rcu_head *rcu)
 
 void afs_put_vlserver(struct afs_net *net, struct afs_vlserver *vlserver)
 {
-	if (vlserver &&
-	    refcount_dec_and_test(&vlserver->ref))
-		call_rcu(&vlserver->rcu, afs_vlserver_rcu);
+	if (vlserver) {
+		unsigned int u = atomic_dec_return(&vlserver->usage);
+		//_debug("VL PUT %p{%u}", vlserver, u);
+
+		if (u == 0)
+			call_rcu(&vlserver->rcu, afs_vlserver_rcu);
+	}
 }
 
 struct afs_vlserver_list *afs_alloc_vlserver_list(unsigned int nr_servers)
@@ -50,7 +53,7 @@ struct afs_vlserver_list *afs_alloc_vlserver_list(unsigned int nr_servers)
 
 	vllist = kzalloc(struct_size(vllist, servers, nr_servers), GFP_KERNEL);
 	if (vllist) {
-		refcount_set(&vllist->ref, 1);
+		atomic_set(&vllist->usage, 1);
 		rwlock_init(&vllist->lock);
 	}
 
@@ -60,7 +63,10 @@ struct afs_vlserver_list *afs_alloc_vlserver_list(unsigned int nr_servers)
 void afs_put_vlserverlist(struct afs_net *net, struct afs_vlserver_list *vllist)
 {
 	if (vllist) {
-		if (refcount_dec_and_test(&vllist->ref)) {
+		unsigned int u = atomic_dec_return(&vllist->usage);
+
+		//_debug("VLLS PUT %p{%u}", vllist, u);
+		if (u == 0) {
 			int i;
 
 			for (i = 0; i < vllist->nr_servers; i++) {
@@ -273,8 +279,8 @@ struct afs_vlserver_list *afs_extract_vlserver_list(struct afs_cell *cell,
 			struct afs_addr_list *old = addrs;
 
 			write_lock(&server->lock);
-			old = rcu_replace_pointer(server->addresses, old,
-						  lockdep_is_held(&server->lock));
+			rcu_swap_protected(server->addresses, old,
+					   lockdep_is_held(&server->lock));
 			write_unlock(&server->lock);
 			afs_put_addrlist(old);
 		}

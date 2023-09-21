@@ -195,7 +195,8 @@ static int bgpio_get_multiple_be(struct gpio_chip *gc, unsigned long *mask,
 	*bits &= ~*mask;
 
 	/* Create a mirrored mask */
-	for_each_set_bit(bit, mask, gc->ngpio)
+	bit = -1;
+	while ((bit = find_next_bit(mask, gc->ngpio, bit + 1)) < gc->ngpio)
 		readmask |= bgpio_line2mask(gc, bit);
 
 	/* Read the register */
@@ -205,7 +206,8 @@ static int bgpio_get_multiple_be(struct gpio_chip *gc, unsigned long *mask,
 	 * Mirror the result into the "bits" result, this will give line 0
 	 * in bit 0 ... line 31 in bit 31 for a 32bit register.
 	 */
-	for_each_set_bit(bit, &val, gc->ngpio)
+	bit = -1;
+	while ((bit = find_next_bit(&val, gc->ngpio, bit + 1)) < gc->ngpio)
 		*bits |= bgpio_line2mask(gc, bit);
 
 	return 0;
@@ -220,7 +222,7 @@ static void bgpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 	unsigned long mask = bgpio_line2mask(gc, gpio);
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
+	spin_lock_irqsave(&gc->bgpio_lock, flags);
 
 	if (val)
 		gc->bgpio_data |= mask;
@@ -229,7 +231,7 @@ static void bgpio_set(struct gpio_chip *gc, unsigned int gpio, int val)
 
 	gc->write_reg(gc->reg_dat, gc->bgpio_data);
 
-	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
+	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 }
 
 static void bgpio_set_with_clear(struct gpio_chip *gc, unsigned int gpio,
@@ -248,7 +250,7 @@ static void bgpio_set_set(struct gpio_chip *gc, unsigned int gpio, int val)
 	unsigned long mask = bgpio_line2mask(gc, gpio);
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
+	spin_lock_irqsave(&gc->bgpio_lock, flags);
 
 	if (val)
 		gc->bgpio_data |= mask;
@@ -257,7 +259,7 @@ static void bgpio_set_set(struct gpio_chip *gc, unsigned int gpio, int val)
 
 	gc->write_reg(gc->reg_set, gc->bgpio_data);
 
-	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
+	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 }
 
 static void bgpio_multiple_get_masks(struct gpio_chip *gc,
@@ -270,11 +272,15 @@ static void bgpio_multiple_get_masks(struct gpio_chip *gc,
 	*set_mask = 0;
 	*clear_mask = 0;
 
-	for_each_set_bit(i, mask, gc->bgpio_bits) {
-		if (test_bit(i, bits))
-			*set_mask |= bgpio_line2mask(gc, i);
-		else
-			*clear_mask |= bgpio_line2mask(gc, i);
+	for (i = 0; i < gc->bgpio_bits; i++) {
+		if (*mask == 0)
+			break;
+		if (__test_and_clear_bit(i, mask)) {
+			if (test_bit(i, bits))
+				*set_mask |= bgpio_line2mask(gc, i);
+			else
+				*clear_mask |= bgpio_line2mask(gc, i);
+		}
 	}
 }
 
@@ -286,7 +292,7 @@ static void bgpio_set_multiple_single_reg(struct gpio_chip *gc,
 	unsigned long flags;
 	unsigned long set_mask, clear_mask;
 
-	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
+	spin_lock_irqsave(&gc->bgpio_lock, flags);
 
 	bgpio_multiple_get_masks(gc, mask, bits, &set_mask, &clear_mask);
 
@@ -295,7 +301,7 @@ static void bgpio_set_multiple_single_reg(struct gpio_chip *gc,
 
 	gc->write_reg(reg, gc->bgpio_data);
 
-	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
+	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 }
 
 static void bgpio_set_multiple(struct gpio_chip *gc, unsigned long *mask,
@@ -347,7 +353,7 @@ static int bgpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
 {
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
+	spin_lock_irqsave(&gc->bgpio_lock, flags);
 
 	gc->bgpio_dir &= ~bgpio_line2mask(gc, gpio);
 
@@ -356,7 +362,7 @@ static int bgpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
 	if (gc->reg_dir_out)
 		gc->write_reg(gc->reg_dir_out, gc->bgpio_dir);
 
-	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
+	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 
 	return 0;
 }
@@ -364,30 +370,24 @@ static int bgpio_dir_in(struct gpio_chip *gc, unsigned int gpio)
 static int bgpio_get_dir(struct gpio_chip *gc, unsigned int gpio)
 {
 	/* Return 0 if output, 1 if input */
-	if (gc->bgpio_dir_unreadable) {
-		if (gc->bgpio_dir & bgpio_line2mask(gc, gpio))
-			return GPIO_LINE_DIRECTION_OUT;
-		return GPIO_LINE_DIRECTION_IN;
-	}
-
-	if (gc->reg_dir_out) {
-		if (gc->read_reg(gc->reg_dir_out) & bgpio_line2mask(gc, gpio))
-			return GPIO_LINE_DIRECTION_OUT;
-		return GPIO_LINE_DIRECTION_IN;
-	}
-
+	if (gc->bgpio_dir_unreadable)
+		return !(gc->bgpio_dir & bgpio_line2mask(gc, gpio));
+	if (gc->reg_dir_out)
+		return !(gc->read_reg(gc->reg_dir_out) & bgpio_line2mask(gc, gpio));
 	if (gc->reg_dir_in)
-		if (!(gc->read_reg(gc->reg_dir_in) & bgpio_line2mask(gc, gpio)))
-			return GPIO_LINE_DIRECTION_OUT;
+		return !!(gc->read_reg(gc->reg_dir_in) & bgpio_line2mask(gc, gpio));
 
-	return GPIO_LINE_DIRECTION_IN;
+	/* This should not happen */
+	return 1;
 }
 
-static void bgpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
+static int bgpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
 {
 	unsigned long flags;
 
-	raw_spin_lock_irqsave(&gc->bgpio_lock, flags);
+	gc->set(gc, gpio, val);
+
+	spin_lock_irqsave(&gc->bgpio_lock, flags);
 
 	gc->bgpio_dir |= bgpio_line2mask(gc, gpio);
 
@@ -396,22 +396,8 @@ static void bgpio_dir_out(struct gpio_chip *gc, unsigned int gpio, int val)
 	if (gc->reg_dir_out)
 		gc->write_reg(gc->reg_dir_out, gc->bgpio_dir);
 
-	raw_spin_unlock_irqrestore(&gc->bgpio_lock, flags);
-}
+	spin_unlock_irqrestore(&gc->bgpio_lock, flags);
 
-static int bgpio_dir_out_dir_first(struct gpio_chip *gc, unsigned int gpio,
-				   int val)
-{
-	bgpio_dir_out(gc, gpio, val);
-	gc->set(gc, gpio, val);
-	return 0;
-}
-
-static int bgpio_dir_out_val_first(struct gpio_chip *gc, unsigned int gpio,
-				   int val)
-{
-	gc->set(gc, gpio, val);
-	bgpio_dir_out(gc, gpio, val);
 	return 0;
 }
 
@@ -544,10 +530,7 @@ static int bgpio_setup_direction(struct gpio_chip *gc,
 	if (dirout || dirin) {
 		gc->reg_dir_out = dirout;
 		gc->reg_dir_in = dirin;
-		if (flags & BGPIOF_NO_SET_ON_INPUT)
-			gc->direction_output = bgpio_dir_out_dir_first;
-		else
-			gc->direction_output = bgpio_dir_out_val_first;
+		gc->direction_output = bgpio_dir_out;
 		gc->direction_input = bgpio_dir_in;
 		gc->get_direction = bgpio_get_dir;
 	} else {
@@ -610,7 +593,7 @@ int bgpio_init(struct gpio_chip *gc, struct device *dev,
 	if (gc->bgpio_bits > BITS_PER_LONG)
 		return -EINVAL;
 
-	raw_spin_lock_init(&gc->bgpio_lock);
+	spin_lock_init(&gc->bgpio_lock);
 	gc->parent = dev;
 	gc->label = dev_name(dev);
 	gc->base = -1;

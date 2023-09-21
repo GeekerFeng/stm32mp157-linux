@@ -62,8 +62,7 @@ struct reset_control_lookup {
  * @of_node: corresponding device tree node as phandle target
  * @of_reset_n_cells: number of cells in reset line specifiers
  * @of_xlate: translation function to translate from specifier as found in the
- *            device tree to id as given to the reset control ops, defaults
- *            to :c:func:`of_reset_simple_xlate`.
+ *            device tree to id as given to the reset control ops
  * @nr_resets: number of reset controls in this reset controller device
  */
 struct reset_controller_dev {
@@ -79,7 +78,6 @@ struct reset_controller_dev {
 	unsigned int nr_resets;
 };
 
-#if IS_ENABLED(CONFIG_RESET_CONTROLLER)
 int reset_controller_register(struct reset_controller_dev *rcdev);
 void reset_controller_unregister(struct reset_controller_dev *rcdev);
 
@@ -89,26 +87,5 @@ int devm_reset_controller_register(struct device *dev,
 
 void reset_controller_add_lookup(struct reset_control_lookup *lookup,
 				 unsigned int num_entries);
-#else
-static inline int reset_controller_register(struct reset_controller_dev *rcdev)
-{
-	return 0;
-}
-
-static inline void reset_controller_unregister(struct reset_controller_dev *rcdev)
-{
-}
-
-static inline int devm_reset_controller_register(struct device *dev,
-						 struct reset_controller_dev *rcdev)
-{
-	return 0;
-}
-
-static inline void reset_controller_add_lookup(struct reset_control_lookup *lookup,
-					       unsigned int num_entries)
-{
-}
-#endif
 
 #endif

@@ -85,7 +85,8 @@ static const struct regulator_desc mt6311_regulators[] = {
 /*
  * I2C driver interface functions
  */
-static int mt6311_i2c_probe(struct i2c_client *i2c)
+static int mt6311_i2c_probe(struct i2c_client *i2c,
+		const struct i2c_device_id *id)
 {
 	struct regulator_config config = { };
 	struct regulator_dev *rdev;
@@ -151,10 +152,9 @@ MODULE_DEVICE_TABLE(of, mt6311_dt_ids);
 static struct i2c_driver mt6311_regulator_driver = {
 	.driver = {
 		.name = "mt6311",
-		.probe_type = PROBE_PREFER_ASYNCHRONOUS,
 		.of_match_table = of_match_ptr(mt6311_dt_ids),
 	},
-	.probe_new = mt6311_i2c_probe,
+	.probe = mt6311_i2c_probe,
 	.id_table = mt6311_i2c_id,
 };
 

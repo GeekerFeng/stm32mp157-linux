@@ -3,6 +3,7 @@
 #include <linux/gfp.h>
 #include <linux/hugetlb.h>
 #include <asm/pgalloc.h>
+#include <asm/pgtable.h>
 #include <asm/tlb.h>
 #include <asm/fixmap.h>
 #include <asm/mtrr.h>
@@ -16,14 +17,6 @@ EXPORT_SYMBOL(physical_mask);
 #define PGTABLE_HIGHMEM __GFP_HIGHMEM
 #else
 #define PGTABLE_HIGHMEM 0
-#endif
-
-#ifndef CONFIG_PARAVIRT
-static inline
-void paravirt_tlb_remove_table(struct mmu_gather *tlb, void *table)
-{
-	tlb_remove_page(tlb, table);
-}
 #endif
 
 gfp_t __userpte_alloc_gfp = GFP_PGTABLE_USER | PGTABLE_HIGHMEM;
@@ -299,6 +292,9 @@ static void pgd_prepopulate_pmd(struct mm_struct *mm, pgd_t *pgd, pmd_t *pmds[])
 	pud_t *pud;
 	int i;
 
+	if (PREALLOCATED_PMDS == 0) /* Work around gcc-3.4.x bug */
+		return;
+
 	p4d = p4d_offset(pgd, 0);
 	pud = pud_offset(p4d, 0);
 
@@ -431,12 +427,10 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 
 	mm->pgd = pgd;
 
-	if (sizeof(pmds) != 0 &&
-			preallocate_pmds(mm, pmds, PREALLOCATED_PMDS) != 0)
+	if (preallocate_pmds(mm, pmds, PREALLOCATED_PMDS) != 0)
 		goto out_free_pgd;
 
-	if (sizeof(u_pmds) != 0 &&
-			preallocate_pmds(mm, u_pmds, PREALLOCATED_USER_PMDS) != 0)
+	if (preallocate_pmds(mm, u_pmds, PREALLOCATED_USER_PMDS) != 0)
 		goto out_free_pmds;
 
 	if (paravirt_pgd_alloc(mm) != 0)
@@ -450,22 +444,17 @@ pgd_t *pgd_alloc(struct mm_struct *mm)
 	spin_lock(&pgd_lock);
 
 	pgd_ctor(mm, pgd);
-	if (sizeof(pmds) != 0)
-		pgd_prepopulate_pmd(mm, pgd, pmds);
-
-	if (sizeof(u_pmds) != 0)
-		pgd_prepopulate_user_pmd(mm, pgd, u_pmds);
+	pgd_prepopulate_pmd(mm, pgd, pmds);
+	pgd_prepopulate_user_pmd(mm, pgd, u_pmds);
 
 	spin_unlock(&pgd_lock);
 
 	return pgd;
 
 out_free_user_pmds:
-	if (sizeof(u_pmds) != 0)
-		free_pmds(mm, u_pmds, PREALLOCATED_USER_PMDS);
+	free_pmds(mm, u_pmds, PREALLOCATED_USER_PMDS);
 out_free_pmds:
-	if (sizeof(pmds) != 0)
-		free_pmds(mm, pmds, PREALLOCATED_PMDS);
+	free_pmds(mm, pmds, PREALLOCATED_PMDS);
 out_free_pgd:
 	_pgd_free(pgd);
 out:
@@ -554,7 +543,7 @@ int ptep_test_and_clear_young(struct vm_area_struct *vma,
 	return ret;
 }
 
-#if defined(CONFIG_TRANSPARENT_HUGEPAGE) || defined(CONFIG_ARCH_HAS_NONLEAF_PMD_YOUNG)
+#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 			      unsigned long addr, pmd_t *pmdp)
 {
@@ -566,9 +555,6 @@ int pmdp_test_and_clear_young(struct vm_area_struct *vma,
 
 	return ret;
 }
-#endif
-
-#ifdef CONFIG_TRANSPARENT_HUGEPAGE
 int pudp_test_and_clear_young(struct vm_area_struct *vma,
 			      unsigned long addr, pud_t *pudp)
 {
@@ -614,16 +600,6 @@ int pmdp_clear_flush_young(struct vm_area_struct *vma,
 		flush_tlb_range(vma, address, address + HPAGE_PMD_SIZE);
 
 	return young;
-}
-
-pmd_t pmdp_invalidate_ad(struct vm_area_struct *vma, unsigned long address,
-			 pmd_t *pmdp)
-{
-	/*
-	 * No flush is necessary. Once an invalid PTE is established, the PTE's
-	 * access and dirty bits cannot be updated.
-	 */
-	return pmdp_establish(vma, address, pmdp, pmd_mkinvalid(*pmdp));
 }
 #endif
 
@@ -693,8 +669,9 @@ int p4d_set_huge(p4d_t *p4d, phys_addr_t addr, pgprot_t prot)
  *
  * No 512GB pages yet -- always return 0
  */
-void p4d_clear_huge(p4d_t *p4d)
+int p4d_clear_huge(p4d_t *p4d)
 {
+	return 0;
 }
 #endif
 
@@ -729,9 +706,11 @@ int pud_set_huge(pud_t *pud, phys_addr_t addr, pgprot_t prot)
 	if (pud_present(*pud) && !pud_huge(*pud))
 		return 0;
 
+	prot = pgprot_4k_2_large(prot);
+
 	set_pte((pte_t *)pud, pfn_pte(
 		(u64)addr >> PAGE_SHIFT,
-		__pgprot(protval_4k_2_large(pgprot_val(prot)) | _PAGE_PSE)));
+		__pgprot(pgprot_val(prot) | _PAGE_PSE)));
 
 	return 1;
 }
@@ -759,9 +738,11 @@ int pmd_set_huge(pmd_t *pmd, phys_addr_t addr, pgprot_t prot)
 	if (pmd_present(*pmd) && !pmd_huge(*pmd))
 		return 0;
 
+	prot = pgprot_4k_2_large(prot);
+
 	set_pte((pte_t *)pmd, pfn_pte(
 		(u64)addr >> PAGE_SHIFT,
-		__pgprot(protval_4k_2_large(pgprot_val(prot)) | _PAGE_PSE)));
+		__pgprot(pgprot_val(prot) | _PAGE_PSE)));
 
 	return 1;
 }
@@ -796,6 +777,14 @@ int pmd_clear_huge(pmd_t *pmd)
 	return 0;
 }
 
+/*
+ * Until we support 512GB pages, skip them in the vmap area.
+ */
+int p4d_free_pud_page(p4d_t *p4d, unsigned long addr)
+{
+	return 0;
+}
+
 #ifdef CONFIG_X86_64
 /**
  * pud_free_pmd_page - Clear pud entry and free pmd page.
@@ -813,7 +802,7 @@ int pud_free_pmd_page(pud_t *pud, unsigned long addr)
 	pte_t *pte;
 	int i;
 
-	pmd = pud_pgtable(*pud);
+	pmd = (pmd_t *)pud_page_vaddr(*pud);
 	pmd_sv = (pmd_t *)__get_free_page(GFP_KERNEL);
 	if (!pmd_sv)
 		return 0;
@@ -837,8 +826,6 @@ int pud_free_pmd_page(pud_t *pud, unsigned long addr)
 	}
 
 	free_page((unsigned long)pmd_sv);
-
-	pgtable_pmd_page_dtor(virt_to_page(pmd));
 	free_page((unsigned long)pmd);
 
 	return 1;
@@ -868,6 +855,11 @@ int pmd_free_pte_page(pmd_t *pmd, unsigned long addr)
 }
 
 #else /* !CONFIG_X86_64 */
+
+int pud_free_pmd_page(pud_t *pud, unsigned long addr)
+{
+	return pud_none(*pud);
+}
 
 /*
  * Disable free page handling on x86-PAE. This assures that ioremap()

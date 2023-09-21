@@ -13,16 +13,12 @@
 #include "exynos5422-odroid-core.dtsi"
 
 / {
-	aliases {
-		mmc0 = &mmc_0;
-	};
-
-	gpio-keys {
+	gpio_keys {
 		compatible = "gpio-keys";
 		pinctrl-names = "default";
 		pinctrl-0 = <&power_key>;
 
-		power-key {
+		power_key {
 			/*
 			 * The power button (SW2) is connected to the PWRON
 			 * pin (active high) of the S2MPS11 PMIC, which acts
@@ -54,7 +50,7 @@
 
 	thermal-zones {
 		cpu0_thermal: cpu0-thermal {
-			thermal-sensors = <&tmu_cpu0>;
+			thermal-sensors = <&tmu_cpu0 0>;
 			polling-delay-passive = <250>;
 			polling-delay = <0>;
 			trips {
@@ -111,7 +107,7 @@
 				/*
 				 * When reaching cpu0_alert3, reduce CPU
 				 * by 2 steps. On Exynos5422/5800 that would
-				 * (usually) be: 1800 MHz and 1200 MHz.
+				 * be: 1600 MHz and 1100 MHz.
 				 */
 				map3 {
 					trip = <&cpu0_alert3>;
@@ -126,24 +122,24 @@
 				};
 				/*
 				 * When reaching cpu0_alert4, reduce CPU
-				 * further, down to 600 MHz (14 steps for big,
-				 * 8 steps for LITTLE).
+				 * further, down to 600 MHz (12 steps for big,
+				 * 7 steps for LITTLE).
 				 */
-				cpu0_cooling_map4: map4 {
+				map4 {
 					trip = <&cpu0_alert4>;
-					cooling-device = <&cpu0 3 8>,
-							 <&cpu1 3 8>,
-							 <&cpu2 3 8>,
-							 <&cpu3 3 8>,
-							 <&cpu4 3 14>,
-							 <&cpu5 3 14>,
-							 <&cpu6 3 14>,
-							 <&cpu7 3 14>;
+					cooling-device = <&cpu0 3 7>,
+							 <&cpu1 3 7>,
+							 <&cpu2 3 7>,
+							 <&cpu3 3 7>,
+							 <&cpu4 3 12>,
+							 <&cpu5 3 12>,
+							 <&cpu6 3 12>,
+							 <&cpu7 3 12>;
 				};
 			};
 		};
 		cpu1_thermal: cpu1-thermal {
-			thermal-sensors = <&tmu_cpu1>;
+			thermal-sensors = <&tmu_cpu1 0>;
 			polling-delay-passive = <250>;
 			polling-delay = <0>;
 			trips {
@@ -202,21 +198,21 @@
 							 <&cpu6 0 2>,
 							 <&cpu7 0 2>;
 				};
-				cpu1_cooling_map4: map4 {
+				map4 {
 					trip = <&cpu1_alert4>;
-					cooling-device = <&cpu0 3 8>,
-							 <&cpu1 3 8>,
-							 <&cpu2 3 8>,
-							 <&cpu3 3 8>,
-							 <&cpu4 3 14>,
-							 <&cpu5 3 14>,
-							 <&cpu6 3 14>,
-							 <&cpu7 3 14>;
+					cooling-device = <&cpu0 3 7>,
+							 <&cpu1 3 7>,
+							 <&cpu2 3 7>,
+							 <&cpu3 3 7>,
+							 <&cpu4 3 12>,
+							 <&cpu5 3 12>,
+							 <&cpu6 3 12>,
+							 <&cpu7 3 12>;
 				};
 			};
 		};
 		cpu2_thermal: cpu2-thermal {
-			thermal-sensors = <&tmu_cpu2>;
+			thermal-sensors = <&tmu_cpu2 0>;
 			polling-delay-passive = <250>;
 			polling-delay = <0>;
 			trips {
@@ -275,21 +271,21 @@
 							 <&cpu6 0 2>,
 							 <&cpu7 0 2>;
 				};
-				cpu2_cooling_map4: map4 {
+				map4 {
 					trip = <&cpu2_alert4>;
-					cooling-device = <&cpu0 3 8>,
-							 <&cpu1 3 8>,
-							 <&cpu2 3 8>,
-							 <&cpu3 3 8>,
-							 <&cpu4 3 14>,
-							 <&cpu5 3 14>,
-							 <&cpu6 3 14>,
-							 <&cpu7 3 14>;
+					cooling-device = <&cpu0 3 7>,
+							 <&cpu1 3 7>,
+							 <&cpu2 3 7>,
+							 <&cpu3 3 7>,
+							 <&cpu4 3 12>,
+							 <&cpu5 3 12>,
+							 <&cpu6 3 12>,
+							 <&cpu7 3 12>;
 				};
 			};
 		};
 		cpu3_thermal: cpu3-thermal {
-			thermal-sensors = <&tmu_cpu3>;
+			thermal-sensors = <&tmu_cpu3 0>;
 			polling-delay-passive = <250>;
 			polling-delay = <0>;
 			trips {
@@ -348,75 +344,16 @@
 							 <&cpu6 0 2>,
 							 <&cpu7 0 2>;
 				};
-				cpu3_cooling_map4: map4 {
-					trip = <&cpu3_alert4>;
-					cooling-device = <&cpu0 3 8>,
-							 <&cpu1 3 8>,
-							 <&cpu2 3 8>,
-							 <&cpu3 3 8>,
-							 <&cpu4 3 14>,
-							 <&cpu5 3 14>,
-							 <&cpu6 3 14>,
-							 <&cpu7 3 14>;
-				};
-			};
-		};
-		gpu_thermal: gpu-thermal {
-			thermal-sensors = <&tmu_gpu>;
-			polling-delay-passive = <250>;
-			polling-delay = <0>;
-			trips {
-				gpu_alert0: gpu-alert-0 {
-					temperature = <50000>;
-					hysteresis = <5000>;
-					type = "active";
-				};
-				gpu_alert1: gpu-alert-1 {
-					temperature = <60000>;
-					hysteresis = <5000>;
-					type = "active";
-				};
-				gpu_alert2: gpu-alert-2 {
-					temperature = <70000>;
-					hysteresis = <5000>;
-					type = "active";
-				};
-				gpu_crit0: gpu-crit-0 {
-					temperature = <120000>;
-					hysteresis = <0>;
-					type = "critical";
-				};
-				gpu_alert3: gpu-alert-3 {
-					temperature = <70000>;
-					hysteresis = <10000>;
-					type = "passive";
-				};
-				gpu_alert4: gpu-alert-4 {
-					temperature = <85000>;
-					hysteresis = <10000>;
-					type = "passive";
-				};
-			};
-			cooling-maps {
-				map0 {
-					trip = <&gpu_alert0>;
-					cooling-device = <&fan0 0 1>;
-				};
-				map1 {
-					trip = <&gpu_alert1>;
-					cooling-device = <&fan0 1 2>;
-				};
-				map2 {
-					trip = <&gpu_alert2>;
-					cooling-device = <&fan0 2 3>;
-				};
-				map3 {
-					trip = <&gpu_alert3>;
-					cooling-device = <&gpu 0 2>;
-				};
 				map4 {
-					trip = <&gpu_alert4>;
-					cooling-device = <&gpu 3 6>;
+					trip = <&cpu3_alert4>;
+					cooling-device = <&cpu0 3 7>,
+							 <&cpu1 3 7>,
+							 <&cpu2 3 7>,
+							 <&cpu3 3 7>,
+							 <&cpu4 3 12>,
+							 <&cpu5 3 12>,
+							 <&cpu6 3 12>,
+							 <&cpu7 3 12>;
 				};
 			};
 		};
@@ -476,7 +413,6 @@
 	pinctrl-0 = <&sd0_clk &sd0_cmd &sd0_bus1 &sd0_bus4 &sd0_bus8 &sd0_cd &sd0_rclk>;
 	bus-width = <8>;
 	cap-mmc-highspeed;
-	mmc-ddr-1_8v;
 	mmc-hs200-1_8v;
 	mmc-hs400-1_8v;
 	max-frequency = <200000000>;
@@ -485,14 +421,14 @@
 };
 
 &pinctrl_0 {
-	power_key: power-key-pins {
+	power_key: power-key {
 		samsung,pins = "gpx0-3";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;
 		samsung,pin-drv = <EXYNOS5420_PIN_DRV_LV1>;
 	};
 
-	hdmi_hpd_irq: hdmi-hpd-irq-pins {
+	hdmi_hpd_irq: hdmi-hpd-irq {
 		samsung,pins = "gpx3-7";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_DOWN>;
@@ -501,7 +437,7 @@
 };
 
 &pinctrl_1 {
-	emmc_nrst_pin: emmc-nrst-pins {
+	emmc_nrst_pin: emmc-nrst {
 		samsung,pins = "gpd1-0";
 		samsung,pin-function = <EXYNOS_PIN_FUNC_INPUT>;
 		samsung,pin-pud = <EXYNOS_PIN_PULL_NONE>;

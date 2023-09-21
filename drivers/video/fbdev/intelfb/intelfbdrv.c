@@ -107,7 +107,6 @@
  *              Add support for 945GME. (Phil Endecott <spam_from_intelfb@chezphil.org>)
  */
 
-#include <linux/aperture.h>
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/errno.h>
@@ -194,7 +193,7 @@ static const struct pci_device_id intelfb_pci_table[] = {
 static int num_registered = 0;
 
 /* fb ops */
-static const struct fb_ops intel_fb_ops = {
+static struct fb_ops intel_fb_ops = {
 	.owner =		THIS_MODULE,
 	.fb_open =              intelfb_open,
 	.fb_release =           intelfb_release,
@@ -389,9 +388,6 @@ static int __init intelfb_init(void)
 	if (idonly)
 		return -ENODEV;
 
-	if (fb_modesetting_disabled("intelfb"))
-		return -ENODEV;
-
 #ifndef MODULE
 	if (fb_get_options("intelfb", &option))
 		return -ENODEV;
@@ -476,7 +472,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 	struct fb_info *info;
 	struct intelfb_info *dinfo;
 	int i, err, dvo;
-	int aperture_size, stolen_size = 0;
+	int aperture_size, stolen_size;
 	struct agp_kern_info gtt_info;
 	int agp_memtype;
 	const char *s;
@@ -486,10 +482,6 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 	int offset;
 
 	DBG_MSG("intelfb_pci_register\n");
-
-	err = aperture_remove_conflicting_pci_devices(pdev, "intelfb");
-	if (err)
-		return err;
 
 	num_registered++;
 	if (num_registered != 1) {
@@ -579,7 +571,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 		return -ENODEV;
 	}
 
-	if (intelfbhw_get_memory(pdev, &aperture_size, &stolen_size)) {
+	if (intelfbhw_get_memory(pdev, &aperture_size,&stolen_size)) {
 		cleanup(dinfo);
 		return -ENODEV;
 	}
@@ -662,7 +654,7 @@ static int intelfb_pci_register(struct pci_dev *pdev,
 	}
 
 	dinfo->mmio_base =
-		(u8 __iomem *)ioremap(dinfo->mmio_base_phys,
+		(u8 __iomem *)ioremap_nocache(dinfo->mmio_base_phys,
 					      INTEL_REG_SIZE);
 	if (!dinfo->mmio_base) {
 		ERR_MSG("Cannot remap MMIO region.\n");
@@ -1221,9 +1213,6 @@ static int intelfb_check_var(struct fb_var_screeninfo *var,
 	DBG_MSG("intelfb_check_var: accel_flags is %d\n", var->accel_flags);
 
 	dinfo = GET_DINFO(info);
-
-	if (!var->pixclock)
-		return -EINVAL;
 
 	/* update the pitch */
 	if (intelfbhw_validate_mode(dinfo, var) != 0)

@@ -24,7 +24,7 @@
 #include <linux/uaccess.h>
 
 
-/*
+/**
  * The msg member must be at the end of the struct, as it's followed by the
  * message data.
  */
@@ -105,6 +105,7 @@ static int opal_prd_mmap(struct file *file, struct vm_area_struct *vma)
 {
 	size_t addr, size;
 	pgprot_t page_prot;
+	int rc;
 
 	pr_devel("opal_prd_mmap(0x%016lx, 0x%016lx, 0x%lx, 0x%lx)\n",
 			vma->vm_start, vma->vm_end, vma->vm_pgoff,
@@ -120,8 +121,10 @@ static int opal_prd_mmap(struct file *file, struct vm_area_struct *vma)
 	page_prot = phys_mem_access_prot(file, vma->vm_pgoff,
 					 size, vma->vm_page_prot);
 
-	return remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, size,
+	rc = remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff, size,
 				page_prot);
+
+	return rc;
 }
 
 static bool opal_msg_queue_empty(void)
@@ -369,12 +372,6 @@ static struct notifier_block opal_prd_event_nb = {
 	.priority	= 0,
 };
 
-static struct notifier_block opal_prd_event_nb2 = {
-	.notifier_call	= opal_prd_msg_notifier,
-	.next		= NULL,
-	.priority	= 0,
-};
-
 static int opal_prd_probe(struct platform_device *pdev)
 {
 	int rc;
@@ -396,10 +393,9 @@ static int opal_prd_probe(struct platform_device *pdev)
 		return rc;
 	}
 
-	rc = opal_message_notifier_register(OPAL_MSG_PRD2, &opal_prd_event_nb2);
+	rc = opal_message_notifier_register(OPAL_MSG_PRD2, &opal_prd_event_nb);
 	if (rc) {
 		pr_err("Couldn't register PRD2 event notifier\n");
-		opal_message_notifier_unregister(OPAL_MSG_PRD, &opal_prd_event_nb);
 		return rc;
 	}
 
@@ -408,8 +404,6 @@ static int opal_prd_probe(struct platform_device *pdev)
 		pr_err("failed to register miscdev\n");
 		opal_message_notifier_unregister(OPAL_MSG_PRD,
 				&opal_prd_event_nb);
-		opal_message_notifier_unregister(OPAL_MSG_PRD2,
-				&opal_prd_event_nb2);
 		return rc;
 	}
 
@@ -420,7 +414,6 @@ static int opal_prd_remove(struct platform_device *pdev)
 {
 	misc_deregister(&opal_prd_dev);
 	opal_message_notifier_unregister(OPAL_MSG_PRD, &opal_prd_event_nb);
-	opal_message_notifier_unregister(OPAL_MSG_PRD2, &opal_prd_event_nb2);
 	return 0;
 }
 

@@ -31,6 +31,7 @@
 #include <asm/io.h>
 #include <asm/irq.h>
 #include <asm/time.h>
+#include <asm/prom.h>
 #include <asm/machdep.h>
 #include <sysdev/fsl_soc.h>
 #include <mm/mmu_decl.h>
@@ -174,7 +175,7 @@ static int __init setup_rstcr(void)
 	};
 
 	for_each_node_by_name(np, "global-utilities") {
-		if (of_property_read_bool(np, "fsl,has-rstcr")) {
+		if ((of_get_property(np, "fsl,has-rstcr", NULL))) {
 			rstcr = of_iomap(np, 0) + 0xb0;
 			if (!rstcr) {
 				printk (KERN_ERR "Error: reset control "

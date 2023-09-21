@@ -170,7 +170,7 @@ static ssize_t xgene_pmu_format_show(struct device *dev,
 	struct dev_ext_attribute *eattr;
 
 	eattr = container_of(attr, struct dev_ext_attribute, attr);
-	return sysfs_emit(buf, "%s\n", (char *) eattr->var);
+	return sprintf(buf, "%s\n", (char *) eattr->var);
 }
 
 #define XGENE_PMU_FORMAT_ATTR(_name, _config)		\
@@ -278,14 +278,17 @@ static const struct attribute_group mc_pmu_v3_format_attr_group = {
 static ssize_t xgene_pmu_event_show(struct device *dev,
 				    struct device_attribute *attr, char *buf)
 {
-	struct perf_pmu_events_attr *pmu_attr =
-		container_of(attr, struct perf_pmu_events_attr, attr);
+	struct dev_ext_attribute *eattr;
 
-	return sysfs_emit(buf, "config=0x%llx\n", pmu_attr->id);
+	eattr = container_of(attr, struct dev_ext_attribute, attr);
+	return sprintf(buf, "config=0x%lx\n", (unsigned long) eattr->var);
 }
 
 #define XGENE_PMU_EVENT_ATTR(_name, _config)		\
-	PMU_EVENT_ATTR_ID(_name, xgene_pmu_event_show, _config)
+	(&((struct dev_ext_attribute[]) {		\
+		{ .attr = __ATTR(_name, S_IRUGO, xgene_pmu_event_show, NULL), \
+		  .var = (void *) _config, }		\
+	 })[0].attr.attr)
 
 static struct attribute *l3c_pmu_events_attrs[] = {
 	XGENE_PMU_EVENT_ATTR(cycle-count,			0x00),
@@ -601,15 +604,15 @@ static const struct attribute_group mc_pmu_v3_events_attr_group = {
 /*
  * sysfs cpumask attributes
  */
-static ssize_t cpumask_show(struct device *dev,
-			    struct device_attribute *attr, char *buf)
+static ssize_t xgene_pmu_cpumask_show(struct device *dev,
+				      struct device_attribute *attr, char *buf)
 {
 	struct xgene_pmu_dev *pmu_dev = to_pmu_dev(dev_get_drvdata(dev));
 
 	return cpumap_print_to_pagebuf(true, buf, &pmu_dev->parent->cpu);
 }
 
-static DEVICE_ATTR_RO(cpumask);
+static DEVICE_ATTR(cpumask, S_IRUGO, xgene_pmu_cpumask_show, NULL);
 
 static struct attribute *xgene_pmu_cpumask_attrs[] = {
 	&dev_attr_cpumask.attr,
@@ -867,7 +870,7 @@ static void xgene_perf_pmu_enable(struct pmu *pmu)
 {
 	struct xgene_pmu_dev *pmu_dev = to_pmu_dev(pmu);
 	struct xgene_pmu *xgene_pmu = pmu_dev->parent;
-	bool enabled = !bitmap_empty(pmu_dev->cntr_assign_mask,
+	int enabled = bitmap_weight(pmu_dev->cntr_assign_mask,
 			pmu_dev->max_counters);
 
 	if (!enabled)
@@ -1231,9 +1234,10 @@ static irqreturn_t xgene_pmu_isr(int irq, void *dev_id)
 	u32 intr_mcu, intr_mcb, intr_l3c, intr_iob;
 	struct xgene_pmu_dev_ctx *ctx;
 	struct xgene_pmu *xgene_pmu = dev_id;
+	unsigned long flags;
 	u32 val;
 
-	raw_spin_lock(&xgene_pmu->lock);
+	raw_spin_lock_irqsave(&xgene_pmu->lock, flags);
 
 	/* Get Interrupt PMU source */
 	val = readl(xgene_pmu->pcppmu_csr + PCPPMU_INTSTATUS_REG);
@@ -1269,7 +1273,7 @@ static irqreturn_t xgene_pmu_isr(int irq, void *dev_id)
 		}
 	}
 
-	raw_spin_unlock(&xgene_pmu->lock);
+	raw_spin_unlock_irqrestore(&xgene_pmu->lock, flags);
 
 	return IRQ_HANDLED;
 }
@@ -1278,21 +1282,25 @@ static int acpi_pmu_probe_active_mcb_mcu_l3c(struct xgene_pmu *xgene_pmu,
 					     struct platform_device *pdev)
 {
 	void __iomem *csw_csr, *mcba_csr, *mcbb_csr;
+	struct resource *res;
 	unsigned int reg;
 
-	csw_csr = devm_platform_ioremap_resource(pdev, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	csw_csr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(csw_csr)) {
 		dev_err(&pdev->dev, "ioremap failed for CSW CSR resource\n");
 		return PTR_ERR(csw_csr);
 	}
 
-	mcba_csr = devm_platform_ioremap_resource(pdev, 2);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 2);
+	mcba_csr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mcba_csr)) {
 		dev_err(&pdev->dev, "ioremap failed for MCBA CSR resource\n");
 		return PTR_ERR(mcba_csr);
 	}
 
-	mcbb_csr = devm_platform_ioremap_resource(pdev, 3);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 3);
+	mcbb_csr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(mcbb_csr)) {
 		dev_err(&pdev->dev, "ioremap failed for MCBB CSR resource\n");
 		return PTR_ERR(mcbb_csr);
@@ -1324,11 +1332,13 @@ static int acpi_pmu_v3_probe_active_mcb_mcu_l3c(struct xgene_pmu *xgene_pmu,
 						struct platform_device *pdev)
 {
 	void __iomem *csw_csr;
+	struct resource *res;
 	unsigned int reg;
 	u32 mcb0routing;
 	u32 mcb1routing;
 
-	csw_csr = devm_platform_ioremap_resource(pdev, 1);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
+	csw_csr = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(csw_csr)) {
 		dev_err(&pdev->dev, "ioremap failed for CSW CSR resource\n");
 		return PTR_ERR(csw_csr);
@@ -1449,6 +1459,17 @@ static char *xgene_pmu_dev_name(struct device *dev, u32 type, int id)
 }
 
 #if defined(CONFIG_ACPI)
+static int acpi_pmu_dev_add_resource(struct acpi_resource *ares, void *data)
+{
+	struct resource *res = data;
+
+	if (ares->type == ACPI_RESOURCE_TYPE_FIXED_MEMORY32)
+		acpi_dev_resource_memory(ares, res);
+
+	/* Always tell the ACPI core to skip this resource */
+	return 1;
+}
+
 static struct
 xgene_pmu_dev_ctx *acpi_get_pmu_hw_inf(struct xgene_pmu *xgene_pmu,
 				       struct acpi_device *adev, u32 type)
@@ -1460,7 +1481,6 @@ xgene_pmu_dev_ctx *acpi_get_pmu_hw_inf(struct xgene_pmu *xgene_pmu,
 	struct hw_pmu_info *inf;
 	void __iomem *dev_csr;
 	struct resource res;
-	struct resource_entry *rentry;
 	int enable_bit;
 	int rc;
 
@@ -1469,23 +1489,11 @@ xgene_pmu_dev_ctx *acpi_get_pmu_hw_inf(struct xgene_pmu *xgene_pmu,
 		return NULL;
 
 	INIT_LIST_HEAD(&resource_list);
-	rc = acpi_dev_get_resources(adev, &resource_list, NULL, NULL);
-	if (rc <= 0) {
-		dev_err(dev, "PMU type %d: No resources found\n", type);
-		return NULL;
-	}
-
-	list_for_each_entry(rentry, &resource_list, node) {
-		if (resource_type(rentry->res) == IORESOURCE_MEM) {
-			res = *rentry->res;
-			rentry = NULL;
-			break;
-		}
-	}
+	rc = acpi_dev_get_resources(adev, &resource_list,
+				    acpi_pmu_dev_add_resource, &res);
 	acpi_dev_free_resource_list(&resource_list);
-
-	if (rentry) {
-		dev_err(dev, "PMU type %d: No memory resource found\n", type);
+	if (rc < 0) {
+		dev_err(dev, "PMU type %d: No resource address found\n", type);
 		return NULL;
 	}
 
@@ -1549,12 +1557,14 @@ static const struct acpi_device_id *xgene_pmu_acpi_match_type(
 static acpi_status acpi_pmu_dev_add(acpi_handle handle, u32 level,
 				    void *data, void **return_value)
 {
-	struct acpi_device *adev = acpi_fetch_acpi_dev(handle);
 	const struct acpi_device_id *acpi_id;
 	struct xgene_pmu *xgene_pmu = data;
 	struct xgene_pmu_dev_ctx *ctx;
+	struct acpi_device *adev;
 
-	if (!adev || acpi_bus_get_status(adev) || !adev->status.present)
+	if (acpi_bus_get_device(handle, &adev))
+		return AE_OK;
+	if (acpi_bus_get_status(adev) || !adev->status.present)
 		return AE_OK;
 
 	acpi_id = xgene_pmu_acpi_match_type(xgene_pmu_acpi_type_match, adev);
@@ -1971,7 +1981,6 @@ static struct platform_driver xgene_pmu_driver = {
 		.name		= "xgene-pmu",
 		.of_match_table = xgene_pmu_of_match,
 		.acpi_match_table = ACPI_PTR(xgene_pmu_acpi_match),
-		.suppress_bind_attrs = true,
 	},
 };
 

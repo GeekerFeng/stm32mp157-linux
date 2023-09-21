@@ -147,7 +147,6 @@ static int i2sbus_get_and_fixup_rsrc(struct device_node *np, int index,
 	return rc;
 }
 
-/* Returns 1 if added, 0 for otherwise; don't return a negative value! */
 /* FIXME: look at device node refcounting */
 static int i2sbus_add_dev(struct macio_dev *macio,
 			  struct i2sbus_control *control,
@@ -161,7 +160,7 @@ static int i2sbus_add_dev(struct macio_dev *macio,
 	static const char *rnames[] = { "i2sbus: %pOFn (control)",
 					"i2sbus: %pOFn (tx)",
 					"i2sbus: %pOFn (rx)" };
-	static const irq_handler_t ints[] = {
+	static irq_handler_t ints[] = {
 		i2sbus_bus_intr,
 		i2sbus_tx_intr,
 		i2sbus_rx_intr
@@ -214,7 +213,7 @@ static int i2sbus_add_dev(struct macio_dev *macio,
 	 * either as the second one in that case is just a modem. */
 	if (!ok) {
 		kfree(dev);
-		return 0;
+		return -ENODEV;
 	}
 
 	mutex_init(&dev->lock);
@@ -303,10 +302,6 @@ static int i2sbus_add_dev(struct macio_dev *macio,
 
 	if (soundbus_add_one(&dev->sound)) {
 		printk(KERN_DEBUG "i2sbus: device registration error!\n");
-		if (dev->sound.ofdev.dev.kobj.state_initialized) {
-			soundbus_dev_put(&dev->sound);
-			return 0;
-		}
 		goto err;
 	}
 

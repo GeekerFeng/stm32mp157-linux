@@ -105,7 +105,7 @@ static int maxinefb_setcolreg(unsigned regno, unsigned red, unsigned green,
 	return 0;
 }
 
-static const struct fb_ops maxinefb_ops = {
+static struct fb_ops maxinefb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_setcolreg	= maxinefb_setcolreg,
 	.fb_fillrect	= cfb_fillrect,
@@ -138,7 +138,7 @@ int __init maxinefb_init(void)
 		*(volatile unsigned char *)fboff = 0x0;
 
 	maxinefb_fix.smem_start = fb_start;
-
+	
 	/* erase hardware cursor */
 	for (i = 0; i < 512; i++) {
 		maxinefb_ims332_write_register(IMS332_REG_CURSOR_RAM + i,

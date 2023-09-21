@@ -20,7 +20,6 @@
 #include <video/of_videomode.h>
 
 #include <drm/drm_fourcc.h>
-#include <drm/drm_framebuffer.h>
 #include <drm/drm_vblank.h>
 #include <drm/exynos_drm.h>
 
@@ -141,7 +140,7 @@ static void decon_ctx_remove(struct decon_context *ctx)
 static u32 decon_calc_clkdiv(struct decon_context *ctx,
 		const struct drm_display_mode *mode)
 {
-	unsigned long ideal_clk = mode->clock;
+	unsigned long ideal_clk = mode->htotal * mode->vtotal * mode->vrefresh;
 	u32 clkdiv;
 
 	/* Find the clock divider value that gets us closest to ideal_clk */
@@ -345,9 +344,8 @@ static void decon_win_set_colkey(struct decon_context *ctx, unsigned int win)
 }
 
 /**
- * decon_shadow_protect_win() - disable updating values from shadow registers at vsync
+ * shadow_protect_win() - disable updating values from shadow registers at vsync
  *
- * @ctx: display and enhancement controller context
  * @win: window to protect registers for
  * @protect: 1 to protect (disable updates)
  */
@@ -529,19 +527,14 @@ static void decon_init(struct decon_context *ctx)
 		writel(VIDCON1_VCLK_HOLD, ctx->regs + VIDCON1(0));
 }
 
-static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
+static void decon_enable(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
-	int ret;
 
 	if (!ctx->suspended)
 		return;
 
-	ret = pm_runtime_resume_and_get(ctx->dev);
-	if (ret < 0) {
-		DRM_DEV_ERROR(ctx->dev, "failed to enable DECON device.\n");
-		return;
-	}
+	pm_runtime_get_sync(ctx->dev);
 
 	decon_init(ctx);
 
@@ -554,7 +547,7 @@ static void decon_atomic_enable(struct exynos_drm_crtc *crtc)
 	ctx->suspended = false;
 }
 
-static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
+static void decon_disable(struct exynos_drm_crtc *crtc)
 {
 	struct decon_context *ctx = crtc->ctx;
 	int i;
@@ -576,8 +569,8 @@ static void decon_atomic_disable(struct exynos_drm_crtc *crtc)
 }
 
 static const struct exynos_drm_crtc_ops decon_crtc_ops = {
-	.atomic_enable = decon_atomic_enable,
-	.atomic_disable = decon_atomic_disable,
+	.enable = decon_enable,
+	.disable = decon_disable,
 	.enable_vblank = decon_enable_vblank,
 	.disable_vblank = decon_disable_vblank,
 	.atomic_begin = decon_atomic_begin,
@@ -661,7 +654,7 @@ static void decon_unbind(struct device *dev, struct device *master,
 {
 	struct decon_context *ctx = dev_get_drvdata(dev);
 
-	decon_atomic_disable(ctx->crtc);
+	decon_disable(ctx->crtc);
 
 	if (ctx->encoder)
 		exynos_dpi_remove(ctx->encoder);
@@ -679,6 +672,7 @@ static int decon_probe(struct platform_device *pdev)
 	struct device *dev = &pdev->dev;
 	struct decon_context *ctx;
 	struct device_node *i80_if_timings;
+	struct resource *res;
 	int ret;
 
 	if (!dev->of_node)
@@ -728,11 +722,16 @@ static int decon_probe(struct platform_device *pdev)
 		goto err_iounmap;
 	}
 
-	ret =  platform_get_irq_byname(pdev, ctx->i80_if ? "lcd_sys" : "vsync");
-	if (ret < 0)
+	res = platform_get_resource_byname(pdev, IORESOURCE_IRQ,
+					   ctx->i80_if ? "lcd_sys" : "vsync");
+	if (!res) {
+		dev_err(dev, "irq request failed.\n");
+		ret = -ENXIO;
 		goto err_iounmap;
+	}
 
-	ret = devm_request_irq(dev, ret, decon_irq_handler, 0, "drm_decon", ctx);
+	ret = devm_request_irq(dev, res->start, decon_irq_handler,
+							0, "drm_decon", ctx);
 	if (ret) {
 		dev_err(dev, "irq request failed.\n");
 		goto err_iounmap;
@@ -779,6 +778,7 @@ static int decon_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
 static int exynos7_decon_suspend(struct device *dev)
 {
 	struct decon_context *ctx = dev_get_drvdata(dev);
@@ -800,51 +800,47 @@ static int exynos7_decon_resume(struct device *dev)
 	if (ret < 0) {
 		DRM_DEV_ERROR(dev, "Failed to prepare_enable the pclk [%d]\n",
 			      ret);
-		goto err_pclk_enable;
+		return ret;
 	}
 
 	ret = clk_prepare_enable(ctx->aclk);
 	if (ret < 0) {
 		DRM_DEV_ERROR(dev, "Failed to prepare_enable the aclk [%d]\n",
 			      ret);
-		goto err_aclk_enable;
+		return ret;
 	}
 
 	ret = clk_prepare_enable(ctx->eclk);
 	if  (ret < 0) {
 		DRM_DEV_ERROR(dev, "Failed to prepare_enable the eclk [%d]\n",
 			      ret);
-		goto err_eclk_enable;
+		return ret;
 	}
 
 	ret = clk_prepare_enable(ctx->vclk);
 	if  (ret < 0) {
 		DRM_DEV_ERROR(dev, "Failed to prepare_enable the vclk [%d]\n",
 			      ret);
-		goto err_vclk_enable;
+		return ret;
 	}
 
 	return 0;
-
-err_vclk_enable:
-	clk_disable_unprepare(ctx->eclk);
-err_eclk_enable:
-	clk_disable_unprepare(ctx->aclk);
-err_aclk_enable:
-	clk_disable_unprepare(ctx->pclk);
-err_pclk_enable:
-	return ret;
 }
+#endif
 
-static DEFINE_RUNTIME_DEV_PM_OPS(exynos7_decon_pm_ops, exynos7_decon_suspend,
-				 exynos7_decon_resume, NULL);
+static const struct dev_pm_ops exynos7_decon_pm_ops = {
+	SET_RUNTIME_PM_OPS(exynos7_decon_suspend, exynos7_decon_resume,
+			   NULL)
+	SET_SYSTEM_SLEEP_PM_OPS(pm_runtime_force_suspend,
+				pm_runtime_force_resume)
+};
 
 struct platform_driver decon_driver = {
 	.probe		= decon_probe,
 	.remove		= decon_remove,
 	.driver		= {
 		.name	= "exynos-decon",
-		.pm	= pm_ptr(&exynos7_decon_pm_ops),
+		.pm	= &exynos7_decon_pm_ops,
 		.of_match_table = decon_driver_dt_match,
 	},
 };

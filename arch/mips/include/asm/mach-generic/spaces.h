@@ -14,10 +14,6 @@
 
 #include <asm/mipsregs.h>
 
-#ifndef IO_SPACE_LIMIT
-#define IO_SPACE_LIMIT 0xffff
-#endif
-
 /*
  * This gives the physical RAM offset.
  */
@@ -30,7 +26,11 @@
 #endif /* __ASSEMBLY__ */
 
 #ifdef CONFIG_32BIT
+#ifdef CONFIG_KVM_GUEST
+#define CAC_BASE		_AC(0x40000000, UL)
+#else
 #define CAC_BASE		_AC(0x80000000, UL)
+#endif
 #ifndef IO_BASE
 #define IO_BASE			_AC(0xa0000000, UL)
 #endif
@@ -39,7 +39,11 @@
 #endif
 
 #ifndef MAP_BASE
+#ifdef CONFIG_KVM_GUEST
+#define MAP_BASE		_AC(0x60000000, UL)
+#else
 #define MAP_BASE		_AC(0xc0000000, UL)
+#endif
 #endif
 
 /*
@@ -92,7 +96,11 @@
 #endif
 
 #ifndef FIXADDR_TOP
+#ifdef CONFIG_KVM_GUEST
+#define FIXADDR_TOP		((unsigned long)(long)(int)0x7ffe0000)
+#else
 #define FIXADDR_TOP		((unsigned long)(long)(int)0xfffe0000)
+#endif
 #endif
 
 #endif /* __ASM_MACH_GENERIC_SPACES_H */

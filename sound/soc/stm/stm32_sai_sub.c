@@ -12,7 +12,6 @@
 #include <linux/module.h>
 #include <linux/of_irq.h>
 #include <linux/of_platform.h>
-#include <linux/pm_runtime.h>
 #include <linux/regmap.h>
 
 #include <sound/asoundef.h>
@@ -45,6 +44,8 @@
 #define STM_SAI_B_ID		0x1
 
 #define STM_SAI_IS_SUB_A(x)	((x)->id == STM_SAI_A_ID)
+#define STM_SAI_IS_SUB_B(x)	((x)->id == STM_SAI_B_ID)
+#define STM_SAI_BLOCK_NAME(x)	(((x)->id == STM_SAI_A_ID) ? "A" : "B")
 
 #define SAI_SYNC_NONE		0x0
 #define SAI_SYNC_INTERNAL	0x1
@@ -717,18 +718,18 @@ static int stm32_sai_set_dai_fmt(struct snd_soc_dai *cpu_dai, unsigned int fmt)
 	stm32_sai_sub_reg_up(sai, STM_SAI_FRCR_REGX, frcr_mask, frcr);
 
 	/* DAI clock master masks */
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BC_FC:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBM_CFM:
 		/* codec is master */
 		cr1 |= SAI_XCR1_SLAVE;
 		sai->master = false;
 		break;
-	case SND_SOC_DAIFMT_BP_FP:
+	case SND_SOC_DAIFMT_CBS_CFS:
 		sai->master = true;
 		break;
 	default:
 		dev_err(cpu_dai->dev, "Unsupported mode %#x\n",
-			fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK);
+			fmt & SND_SOC_DAIFMT_MASTER_MASK);
 		return -EINVAL;
 	}
 
@@ -836,7 +837,7 @@ static int stm32_sai_set_config(struct snd_soc_dai *cpu_dai,
 		cr1 = SAI_XCR1_DS_SET(SAI_DATASIZE_32);
 		break;
 	default:
-		dev_err(cpu_dai->dev, "Data format not supported\n");
+		dev_err(cpu_dai->dev, "Data format not supported");
 		return -EINVAL;
 	}
 
@@ -1236,8 +1237,8 @@ static int stm32_sai_pcm_process_spdif(struct snd_pcm_substream *substream,
 				       void *buf, unsigned long bytes)
 {
 	struct snd_pcm_runtime *runtime = substream->runtime;
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct stm32_sai_sub_data *sai = dev_get_drvdata(cpu_dai->dev);
 	int *ptr = (int *)(runtime->dma_area + hwoff +
 			   channel * (runtime->dma_bytes / runtime->channels));
@@ -1292,7 +1293,7 @@ static struct snd_soc_dai_driver stm32_sai_playback_dai = {
 		.id = 1, /* avoid call to fmt_single_name() */
 		.playback = {
 			.channels_min = 1,
-			.channels_max = 16,
+			.channels_max = 2,
 			.rate_min = 8000,
 			.rate_max = 192000,
 			.rates = SNDRV_PCM_RATE_CONTINUOUS,
@@ -1310,7 +1311,7 @@ static struct snd_soc_dai_driver stm32_sai_capture_dai = {
 		.id = 1, /* avoid call to fmt_single_name() */
 		.capture = {
 			.channels_min = 1,
-			.channels_max = 16,
+			.channels_max = 2,
 			.rate_min = 8000,
 			.rate_max = 192000,
 			.rates = SNDRV_PCM_RATE_CONTINUOUS,
@@ -1336,7 +1337,6 @@ static const struct snd_dmaengine_pcm_config stm32_sai_pcm_config_spdif = {
 
 static const struct snd_soc_component_driver stm32_component = {
 	.name = "stm32-sai",
-	.legacy_dai_naming = 1,
 };
 
 static const struct of_device_id stm32_sai_sub_ids[] = {
@@ -1360,7 +1360,8 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 	if (!np)
 		return -ENODEV;
 
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -1378,9 +1379,10 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 	 */
 	sai->regmap = devm_regmap_init_mmio(&pdev->dev, base,
 					    sai->regmap_config);
-	if (IS_ERR(sai->regmap))
-		return dev_err_probe(&pdev->dev, PTR_ERR(sai->regmap),
-				     "Regmap init error\n");
+	if (IS_ERR(sai->regmap)) {
+		dev_err(&pdev->dev, "Failed to initialize MMIO\n");
+		return PTR_ERR(sai->regmap);
+	}
 
 	/* Get direction property */
 	if (of_property_match_string(np, "dma-names", "tx") >= 0) {
@@ -1394,7 +1396,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 
 	/* Get spdif iec60958 property */
 	sai->spdif = false;
-	if (of_property_present(np, "st,iec60958")) {
+	if (of_get_property(np, "st,iec60958", NULL)) {
 		if (!STM_SAI_HAS_SPDIF(sai) ||
 		    sai->dir == SNDRV_PCM_STREAM_CAPTURE) {
 			dev_err(&pdev->dev, "S/PDIF IEC60958 not supported\n");
@@ -1468,9 +1470,10 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 
 	of_node_put(args.np);
 	sai->sai_ck = devm_clk_get(&pdev->dev, "sai_ck");
-	if (IS_ERR(sai->sai_ck))
-		return dev_err_probe(&pdev->dev, PTR_ERR(sai->sai_ck),
-				     "Missing kernel clock sai_ck\n");
+	if (IS_ERR(sai->sai_ck)) {
+		dev_err(&pdev->dev, "Missing kernel clock sai_ck\n");
+		return PTR_ERR(sai->sai_ck);
+	}
 
 	ret = clk_prepare(sai->pdata->pclk);
 	if (ret < 0)
@@ -1480,7 +1483,7 @@ static int stm32_sai_sub_parse_of(struct platform_device *pdev,
 		return 0;
 
 	/* Register mclk provider if requested */
-	if (of_property_present(np, "#clock-cells")) {
+	if (of_find_property(np, "#clock-cells", NULL)) {
 		ret = stm32_sai_add_mclk_provider(sai);
 		if (ret < 0)
 			return ret;
@@ -1540,33 +1543,32 @@ static int stm32_sai_sub_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	if (STM_SAI_PROTOCOL_IS_SPDIF(sai))
-		conf = &stm32_sai_pcm_config_spdif;
-
 	ret = snd_dmaengine_pcm_register(&pdev->dev, conf, 0);
-	if (ret)
-		return dev_err_probe(&pdev->dev, ret, "Could not register pcm dma\n");
-
-	ret = snd_soc_register_component(&pdev->dev, &stm32_component,
-					 &sai->cpu_dai_drv, 1);
 	if (ret) {
-		snd_dmaengine_pcm_unregister(&pdev->dev);
+		dev_err(&pdev->dev, "Could not register pcm dma\n");
 		return ret;
 	}
 
-	pm_runtime_enable(&pdev->dev);
+	ret = snd_soc_register_component(&pdev->dev, &stm32_component,
+					 &sai->cpu_dai_drv, 1);
+	if (ret)
+		return ret;
+
+	if (STM_SAI_PROTOCOL_IS_SPDIF(sai))
+		conf = &stm32_sai_pcm_config_spdif;
 
 	return 0;
 }
 
-static void stm32_sai_sub_remove(struct platform_device *pdev)
+static int stm32_sai_sub_remove(struct platform_device *pdev)
 {
 	struct stm32_sai_sub_data *sai = dev_get_drvdata(&pdev->dev);
 
 	clk_unprepare(sai->pdata->pclk);
 	snd_dmaengine_pcm_unregister(&pdev->dev);
 	snd_soc_unregister_component(&pdev->dev);
-	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -1616,7 +1618,7 @@ static struct platform_driver stm32_sai_sub_driver = {
 		.pm = &stm32_sai_sub_pm_ops,
 	},
 	.probe = stm32_sai_sub_probe,
-	.remove_new = stm32_sai_sub_remove,
+	.remove = stm32_sai_sub_remove,
 };
 
 module_platform_driver(stm32_sai_sub_driver);

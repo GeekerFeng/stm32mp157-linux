@@ -47,7 +47,7 @@ static struct sample fake_samples[] = {
 };
 
 /*
- * Will be cast to struct ip_callchain which has all 64 bit entries
+ * Will be casted to struct ip_callchain which has all 64 bit entries
  * of nr and ips[].
  */
 static u64 fake_callchains[][10] = {
@@ -112,7 +112,6 @@ static int add_hist_entries(struct hists *hists, struct machine *machine)
 		}
 
 		fake_samples[i].thread = al.thread;
-		map__put(fake_samples[i].map);
 		fake_samples[i].map = al.map;
 		fake_samples[i].sym = al.sym;
 	}
@@ -148,23 +147,15 @@ static void del_hist_entries(struct hists *hists)
 	}
 }
 
-static void put_fake_samples(void)
-{
-	size_t i;
-
-	for (i = 0; i < ARRAY_SIZE(fake_samples); i++)
-		map__put(fake_samples[i].map);
-}
-
 typedef int (*test_fn_t)(struct evsel *, struct machine *);
 
 #define COMM(he)  (thread__comm_str(he->thread))
-#define DSO(he)   (map__dso(he->ms.map)->short_name)
+#define DSO(he)   (he->ms.map->dso->short_name)
 #define SYM(he)   (he->ms.sym->name)
 #define CPU(he)   (he->cpu)
 #define PID(he)   (he->thread->tid)
 #define DEPTH(he) (he->callchain->max_depth)
-#define CDSO(cl)  (map__dso(cl->ms.map)->short_name)
+#define CDSO(cl)  (cl->ms.map->dso->short_name)
 #define CSYM(cl)  (cl->ms.sym->name)
 
 struct result {
@@ -199,7 +190,7 @@ static int do_test(struct hists *hists, struct result *expected, size_t nr_expec
 	 * function since TEST_ASSERT_VAL() returns in case of failure.
 	 */
 	hists__collapse_resort(hists, NULL);
-	evsel__output_resort(hists_to_evsel(hists), NULL);
+	perf_evsel__output_resort(hists_to_evsel(hists), NULL);
 
 	if (verbose > 2) {
 		pr_info("use callchain: %d, cumulate callchain: %d\n",
@@ -289,7 +280,7 @@ static int test1(struct evsel *evsel, struct machine *machine)
 
 	symbol_conf.use_callchain = false;
 	symbol_conf.cumulate_callchain = false;
-	evsel__reset_sample_bit(evsel, CALLCHAIN);
+	perf_evsel__reset_sample_bit(evsel, CALLCHAIN);
 
 	setup_sorting(NULL);
 	callchain_register_param(&callchain_param);
@@ -306,7 +297,7 @@ out:
 	return err;
 }
 
-/* callchain + NO children */
+/* callcain + NO children */
 static int test2(struct evsel *evsel, struct machine *machine)
 {
 	int err;
@@ -436,7 +427,7 @@ static int test2(struct evsel *evsel, struct machine *machine)
 
 	symbol_conf.use_callchain = true;
 	symbol_conf.cumulate_callchain = false;
-	evsel__set_sample_bit(evsel, CALLCHAIN);
+	perf_evsel__set_sample_bit(evsel, CALLCHAIN);
 
 	setup_sorting(NULL);
 	callchain_register_param(&callchain_param);
@@ -494,7 +485,7 @@ static int test3(struct evsel *evsel, struct machine *machine)
 
 	symbol_conf.use_callchain = false;
 	symbol_conf.cumulate_callchain = true;
-	evsel__reset_sample_bit(evsel, CALLCHAIN);
+	perf_evsel__reset_sample_bit(evsel, CALLCHAIN);
 
 	setup_sorting(NULL);
 	callchain_register_param(&callchain_param);
@@ -678,7 +669,7 @@ static int test4(struct evsel *evsel, struct machine *machine)
 
 	symbol_conf.use_callchain = true;
 	symbol_conf.cumulate_callchain = true;
-	evsel__set_sample_bit(evsel, CALLCHAIN);
+	perf_evsel__set_sample_bit(evsel, CALLCHAIN);
 
 	setup_sorting(NULL);
 
@@ -698,7 +689,7 @@ out:
 	return err;
 }
 
-static int test__hists_cumulate(struct test_suite *test __maybe_unused, int subtest __maybe_unused)
+int test__hists_cumulate(struct test *test __maybe_unused, int subtest __maybe_unused)
 {
 	int err = TEST_FAIL;
 	struct machines machines;
@@ -715,7 +706,7 @@ static int test__hists_cumulate(struct test_suite *test __maybe_unused, int subt
 
 	TEST_ASSERT_VAL("No memory", evlist);
 
-	err = parse_event(evlist, "cpu-clock");
+	err = parse_events(evlist, "cpu-clock", NULL);
 	if (err)
 		goto out;
 	err = TEST_FAIL;
@@ -742,9 +733,6 @@ out:
 	/* tear down everything */
 	evlist__delete(evlist);
 	machines__exit(&machines);
-	put_fake_samples();
 
 	return err;
 }
-
-DEFINE_SUITE("Cumulate child hist entries", hists_cumulate);

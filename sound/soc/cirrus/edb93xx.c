@@ -22,9 +22,9 @@
 static int edb93xx_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	int err;
 	unsigned int mclk_rate;
 	unsigned int rate = params_rate(params);
@@ -60,7 +60,7 @@ static struct snd_soc_dai_link edb93xx_dai = {
 	.name		= "CS4271",
 	.stream_name	= "CS4271 HiFi",
 	.dai_fmt	= SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
-			  SND_SOC_DAIFMT_CBC_CFC,
+			  SND_SOC_DAIFMT_CBS_CFS,
 	.ops		= &edb93xx_ops,
 	SND_SOC_DAILINK_REG(hifi),
 };
@@ -93,12 +93,14 @@ static int edb93xx_probe(struct platform_device *pdev)
 	return ret;
 }
 
-static void edb93xx_remove(struct platform_device *pdev)
+static int edb93xx_remove(struct platform_device *pdev)
 {
 	struct snd_soc_card *card = platform_get_drvdata(pdev);
 
 	snd_soc_unregister_card(card);
 	ep93xx_i2s_release();
+
+	return 0;
 }
 
 static struct platform_driver edb93xx_driver = {
@@ -106,7 +108,7 @@ static struct platform_driver edb93xx_driver = {
 		.name	= "edb93xx-audio",
 	},
 	.probe		= edb93xx_probe,
-	.remove_new	= edb93xx_remove,
+	.remove		= edb93xx_remove,
 };
 
 module_platform_driver(edb93xx_driver);

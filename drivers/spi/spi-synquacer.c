@@ -250,7 +250,7 @@ static int synquacer_spi_config(struct spi_master *master,
 	}
 
 	mode = spi->mode;
-	cs = spi_get_chipselect(spi, 0);
+	cs = spi->chip_select;
 	speed = xfer->speed_hz;
 	bpw = xfer->bits_per_word;
 
@@ -344,7 +344,7 @@ static int synquacer_spi_config(struct spi_master *master,
 	sspi->bpw = bpw;
 	sspi->mode = mode;
 	sspi->speed = speed;
-	sspi->cs = spi_get_chipselect(spi, 0);
+	sspi->cs = spi->chip_select;
 	sspi->bus_width = bus_width;
 
 	return 0;
@@ -472,9 +472,10 @@ static int synquacer_spi_transfer_one(struct spi_master *master,
 		read_fifo(sspi);
 	}
 
-	if (status == 0) {
-		dev_err(sspi->dev, "failed to transfer. Timeout.\n");
-		return -ETIMEDOUT;
+	if (status < 0) {
+		dev_err(sspi->dev, "failed to transfer. status: 0x%x\n",
+			status);
+		return status;
 	}
 
 	return 0;
@@ -488,11 +489,7 @@ static void synquacer_spi_set_cs(struct spi_device *spi, bool enable)
 	val = readl(sspi->regs + SYNQUACER_HSSPI_REG_DMSTART);
 	val &= ~(SYNQUACER_HSSPI_DMPSEL_CS_MASK <<
 		 SYNQUACER_HSSPI_DMPSEL_CS_SHIFT);
-	val |= spi_get_chipselect(spi, 0) << SYNQUACER_HSSPI_DMPSEL_CS_SHIFT;
-
-	if (!enable)
-		val |= SYNQUACER_HSSPI_DMSTOP_STOP;
-
+	val |= spi->chip_select << SYNQUACER_HSSPI_DMPSEL_CS_SHIFT;
 	writel(val, sspi->regs + SYNQUACER_HSSPI_REG_DMSTART);
 }
 
@@ -643,8 +640,9 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 		}
 
 		if (IS_ERR(sspi->clk)) {
-			ret = dev_err_probe(&pdev->dev, PTR_ERR(sspi->clk),
-					    "clock not found\n");
+			if (!(PTR_ERR(sspi->clk) == -EPROBE_DEFER))
+				dev_err(&pdev->dev, "clock not found\n");
+			ret = PTR_ERR(sspi->clk);
 			goto put_spi;
 		}
 
@@ -660,8 +658,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 
 	if (!master->max_speed_hz) {
 		dev_err(&pdev->dev, "missing clock source\n");
-		ret = -EINVAL;
-		goto disable_clk;
+		return -EINVAL;
 	}
 	master->min_speed_hz = master->max_speed_hz / 254;
 
@@ -674,7 +671,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 	rx_irq = platform_get_irq(pdev, 0);
 	if (rx_irq <= 0) {
 		ret = rx_irq;
-		goto disable_clk;
+		goto put_spi;
 	}
 	snprintf(sspi->rx_irq_name, SYNQUACER_HSSPI_IRQ_NAME_MAX, "%s-rx",
 		 dev_name(&pdev->dev));
@@ -682,13 +679,13 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 				0, sspi->rx_irq_name, sspi);
 	if (ret) {
 		dev_err(&pdev->dev, "request rx_irq failed (%d)\n", ret);
-		goto disable_clk;
+		goto put_spi;
 	}
 
 	tx_irq = platform_get_irq(pdev, 1);
 	if (tx_irq <= 0) {
 		ret = tx_irq;
-		goto disable_clk;
+		goto put_spi;
 	}
 	snprintf(sspi->tx_irq_name, SYNQUACER_HSSPI_IRQ_NAME_MAX, "%s-tx",
 		 dev_name(&pdev->dev));
@@ -696,7 +693,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 				0, sspi->tx_irq_name, sspi);
 	if (ret) {
 		dev_err(&pdev->dev, "request tx_irq failed (%d)\n", ret);
-		goto disable_clk;
+		goto put_spi;
 	}
 
 	master->dev.of_node = np;
@@ -714,7 +711,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 
 	ret = synquacer_spi_enable(master);
 	if (ret)
-		goto disable_clk;
+		goto fail_enable;
 
 	pm_runtime_set_active(sspi->dev);
 	pm_runtime_enable(sspi->dev);
@@ -727,7 +724,7 @@ static int synquacer_spi_probe(struct platform_device *pdev)
 
 disable_pm:
 	pm_runtime_disable(sspi->dev);
-disable_clk:
+fail_enable:
 	clk_disable_unprepare(sspi->clk);
 put_spi:
 	spi_master_put(master);
@@ -735,7 +732,7 @@ put_spi:
 	return ret;
 }
 
-static void synquacer_spi_remove(struct platform_device *pdev)
+static int synquacer_spi_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = platform_get_drvdata(pdev);
 	struct synquacer_spi *sspi = spi_master_get_devdata(master);
@@ -743,6 +740,8 @@ static void synquacer_spi_remove(struct platform_device *pdev)
 	pm_runtime_disable(sspi->dev);
 
 	clk_disable_unprepare(sspi->clk);
+
+	return 0;
 }
 
 static int __maybe_unused synquacer_spi_suspend(struct device *dev)
@@ -780,7 +779,6 @@ static int __maybe_unused synquacer_spi_resume(struct device *dev)
 
 		ret = synquacer_spi_enable(master);
 		if (ret) {
-			clk_disable_unprepare(sspi->clk);
 			dev_err(dev, "failed to enable spi (%d)\n", ret);
 			return ret;
 		}
@@ -818,7 +816,7 @@ static struct platform_driver synquacer_spi_driver = {
 		.acpi_match_table = ACPI_PTR(synquacer_hsspi_acpi_ids),
 	},
 	.probe = synquacer_spi_probe,
-	.remove_new = synquacer_spi_remove,
+	.remove = synquacer_spi_remove,
 };
 module_platform_driver(synquacer_spi_driver);
 

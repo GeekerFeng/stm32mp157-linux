@@ -118,8 +118,8 @@ struct exynos_drm_plane_config {
 /*
  * Exynos drm crtc ops
  *
- * @atomic_enable: enable the device
- * @atomic_disable: disable the device
+ * @enable: enable the device
+ * @disable: disable the device
  * @enable_vblank: specific driver callback for enabling vblank interrupt.
  * @disable_vblank: specific driver callback for disabling vblank interrupt.
  * @mode_valid: specific driver callback for mode validation
@@ -133,8 +133,8 @@ struct exynos_drm_plane_config {
  */
 struct exynos_drm_crtc;
 struct exynos_drm_crtc_ops {
-	void (*atomic_enable)(struct exynos_drm_crtc *crtc);
-	void (*atomic_disable)(struct exynos_drm_crtc *crtc);
+	void (*enable)(struct exynos_drm_crtc *crtc);
+	void (*disable)(struct exynos_drm_crtc *crtc);
 	int (*enable_vblank)(struct exynos_drm_crtc *crtc);
 	void (*disable_vblank)(struct exynos_drm_crtc *crtc);
 	enum drm_mode_status (*mode_valid)(struct exynos_drm_crtc *crtc,
@@ -197,6 +197,8 @@ struct drm_exynos_file_private {
  * @wait: wait an atomic commit to finish
  */
 struct exynos_drm_private {
+	struct drm_fb_helper *fb_helper;
+
 	struct device *g2d_dev;
 	struct device *dma_dev;
 	void *mapping;

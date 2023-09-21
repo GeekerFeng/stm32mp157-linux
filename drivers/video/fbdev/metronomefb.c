@@ -10,7 +10,7 @@
  * Layout is based on skeletonfb.c by James Simmons and Geert Uytterhoeven.
  *
  * This work was made possible by help and equipment support from E-Ink
- * Corporation. https://www.eink.com/
+ * Corporation. http://www.eink.com/
  *
  * This driver is written to be used with the Metronome display controller.
  * It is intended to be architecture independent. A board specific driver
@@ -465,18 +465,20 @@ static u16 metronomefb_dpy_update_page(struct metronomefb_par *par, int index)
 }
 
 /* this is called back from the deferred io workqueue */
-static void metronomefb_dpy_deferred_io(struct fb_info *info, struct list_head *pagereflist)
+static void metronomefb_dpy_deferred_io(struct fb_info *info,
+				struct list_head *pagelist)
 {
 	u16 cksum;
-	struct fb_deferred_io_pageref *pageref;
+	struct page *cur;
+	struct fb_deferred_io *fbdefio = info->fbdefio;
 	struct metronomefb_par *par = info->par;
 
 	/* walk the written page list and swizzle the data */
-	list_for_each_entry(pageref, pagereflist, list) {
-		unsigned long pgoffset = pageref->offset >> PAGE_SHIFT;
-		cksum = metronomefb_dpy_update_page(par, pageref->offset);
-		par->metromem_img_csum -= par->csum_table[pgoffset];
-		par->csum_table[pgoffset] = cksum;
+	list_for_each_entry(cur, &fbdefio->pagelist, lru) {
+		cksum = metronomefb_dpy_update_page(par,
+					(cur->index << PAGE_SHIFT));
+		par->metromem_img_csum -= par->csum_table[cur->index];
+		par->csum_table[cur->index] = cksum;
 		par->metromem_img_csum += cksum;
 	}
 
@@ -556,19 +558,17 @@ static ssize_t metronomefb_write(struct fb_info *info, const char __user *buf,
 	return (err) ? err : count;
 }
 
-static const struct fb_ops metronomefb_ops = {
+static struct fb_ops metronomefb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_write	= metronomefb_write,
 	.fb_fillrect	= metronomefb_fillrect,
 	.fb_copyarea	= metronomefb_copyarea,
 	.fb_imageblit	= metronomefb_imageblit,
-	.fb_mmap	= fb_deferred_io_mmap,
 };
 
 static struct fb_deferred_io metronomefb_defio = {
-	.delay			= HZ,
-	.sort_pagereflist	= true,
-	.deferred_io		= metronomefb_dpy_deferred_io,
+	.delay		= HZ,
+	.deferred_io	= metronomefb_dpy_deferred_io,
 };
 
 static int metronomefb_probe(struct platform_device *dev)
@@ -744,7 +744,7 @@ err:
 	return retval;
 }
 
-static void metronomefb_remove(struct platform_device *dev)
+static int metronomefb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
 
@@ -761,11 +761,12 @@ static void metronomefb_remove(struct platform_device *dev)
 		dev_dbg(&dev->dev, "calling release\n");
 		framebuffer_release(info);
 	}
+	return 0;
 }
 
 static struct platform_driver metronomefb_driver = {
 	.probe	= metronomefb_probe,
-	.remove_new = metronomefb_remove,
+	.remove = metronomefb_remove,
 	.driver	= {
 		.name	= "metronomefb",
 	},

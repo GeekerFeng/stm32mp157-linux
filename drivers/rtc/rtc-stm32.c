@@ -209,7 +209,7 @@ static irqreturn_t stm32_rtc_alarm_irq(int irq, void *dev_id)
 	const struct stm32_rtc_events *evts = &rtc->data->events;
 	unsigned int status, cr;
 
-	rtc_lock(rtc->rtc_dev);
+	mutex_lock(&rtc->rtc_dev->ops_lock);
 
 	status = readl_relaxed(rtc->base + regs->sr);
 	cr = readl_relaxed(rtc->base + regs->cr);
@@ -226,7 +226,7 @@ static irqreturn_t stm32_rtc_alarm_irq(int irq, void *dev_id)
 		stm32_rtc_clear_event_flags(rtc, evts->alra);
 	}
 
-	rtc_unlock(rtc->rtc_dev);
+	mutex_unlock(&rtc->rtc_dev->ops_lock);
 
 	return IRQ_HANDLED;
 }
@@ -693,13 +693,15 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 {
 	struct stm32_rtc *rtc;
 	const struct stm32_rtc_registers *regs;
+	struct resource *res;
 	int ret;
 
 	rtc = devm_kzalloc(&pdev->dev, sizeof(*rtc), GFP_KERNEL);
 	if (!rtc)
 		return -ENOMEM;
 
-	rtc->base = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rtc->base = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(rtc->base))
 		return PTR_ERR(rtc->base);
 
@@ -754,7 +756,7 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 
 	ret = clk_prepare_enable(rtc->rtc_ck);
 	if (ret)
-		goto err_no_rtc_ck;
+		goto err;
 
 	if (rtc->data->need_dbp)
 		regmap_update_bits(rtc->dbp, rtc->dbp_reg,
@@ -830,12 +832,10 @@ static int stm32_rtc_probe(struct platform_device *pdev)
 	}
 
 	return 0;
-
 err:
-	clk_disable_unprepare(rtc->rtc_ck);
-err_no_rtc_ck:
 	if (rtc->data->has_pclk)
 		clk_disable_unprepare(rtc->pclk);
+	clk_disable_unprepare(rtc->rtc_ck);
 
 	if (rtc->data->need_dbp)
 		regmap_update_bits(rtc->dbp, rtc->dbp_reg, rtc->dbp_mask, 0);
@@ -846,7 +846,7 @@ err_no_rtc_ck:
 	return ret;
 }
 
-static void stm32_rtc_remove(struct platform_device *pdev)
+static int stm32_rtc_remove(struct platform_device *pdev)
 {
 	struct stm32_rtc *rtc = platform_get_drvdata(pdev);
 	const struct stm32_rtc_registers *regs = &rtc->data->regs;
@@ -869,6 +869,8 @@ static void stm32_rtc_remove(struct platform_device *pdev)
 
 	dev_pm_clear_wake_irq(&pdev->dev);
 	device_init_wakeup(&pdev->dev, false);
+
+	return 0;
 }
 
 #ifdef CONFIG_PM_SLEEP
@@ -897,11 +899,8 @@ static int stm32_rtc_resume(struct device *dev)
 	}
 
 	ret = stm32_rtc_wait_sync(rtc);
-	if (ret < 0) {
-		if (rtc->data->has_pclk)
-			clk_disable_unprepare(rtc->pclk);
+	if (ret < 0)
 		return ret;
-	}
 
 	if (device_may_wakeup(dev))
 		return disable_irq_wake(rtc->irq_alarm);
@@ -915,7 +914,7 @@ static SIMPLE_DEV_PM_OPS(stm32_rtc_pm_ops,
 
 static struct platform_driver stm32_rtc_driver = {
 	.probe		= stm32_rtc_probe,
-	.remove_new	= stm32_rtc_remove,
+	.remove		= stm32_rtc_remove,
 	.driver		= {
 		.name	= DRIVER_NAME,
 		.pm	= &stm32_rtc_pm_ops,

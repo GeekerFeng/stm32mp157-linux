@@ -77,15 +77,18 @@ static int omap2_mcbsp_set_clks_src(struct omap_mcbsp *mcbsp, u8 fck_src_id)
 	pm_runtime_put_sync(mcbsp->dev);
 
 	r = clk_set_parent(mcbsp->fclk, fck_src);
-	if (r)
+	if (r) {
 		dev_err(mcbsp->dev, "CLKS: could not clk_set_parent() to %s\n",
 			src);
+		clk_put(fck_src);
+		return r;
+	}
 
 	pm_runtime_get_sync(mcbsp->dev);
 
 	clk_put(fck_src);
 
-	return r;
+	return 0;
 }
 
 static irqreturn_t omap_mcbsp_irq_handler(int irq, void *data)
@@ -373,9 +376,10 @@ static void omap_mcbsp_free(struct omap_mcbsp *mcbsp)
 		MCBSP_WRITE(mcbsp, WAKEUPEN, 0);
 
 	/* Disable interrupt requests */
-	if (mcbsp->irq) {
+	if (mcbsp->irq)
 		MCBSP_WRITE(mcbsp, IRQEN, 0);
 
+	if (mcbsp->irq) {
 		free_irq(mcbsp->irq, (void *)mcbsp);
 	} else {
 		free_irq(mcbsp->rx_irq, (void *)mcbsp);
@@ -517,7 +521,7 @@ static ssize_t prop##_show(struct device *dev,				\
 {									\
 	struct omap_mcbsp *mcbsp = dev_get_drvdata(dev);		\
 									\
-	return sysfs_emit(buf, "%u\n", mcbsp->prop);			\
+	return sprintf(buf, "%u\n", mcbsp->prop);			\
 }									\
 									\
 static ssize_t prop##_store(struct device *dev,				\
@@ -539,7 +543,7 @@ static ssize_t prop##_store(struct device *dev,				\
 	return size;							\
 }									\
 									\
-static DEVICE_ATTR_RW(prop)
+static DEVICE_ATTR(prop, 0644, prop##_show, prop##_store)
 
 THRESHOLD_PROP_BUILDER(max_tx_thres);
 THRESHOLD_PROP_BUILDER(max_rx_thres);
@@ -560,11 +564,11 @@ static ssize_t dma_op_mode_show(struct device *dev,
 
 	for (s = &dma_op_modes[i]; i < ARRAY_SIZE(dma_op_modes); s++, i++) {
 		if (dma_op_mode == i)
-			len += sysfs_emit_at(buf, len, "[%s] ", *s);
+			len += sprintf(buf + len, "[%s] ", *s);
 		else
-			len += sysfs_emit_at(buf, len, "%s ", *s);
+			len += sprintf(buf + len, "%s ", *s);
 	}
-	len += sysfs_emit_at(buf, len, "\n");
+	len += sprintf(buf + len, "\n");
 
 	return len;
 }
@@ -614,7 +618,7 @@ static int omap_mcbsp_init(struct platform_device *pdev)
 {
 	struct omap_mcbsp *mcbsp = platform_get_drvdata(pdev);
 	struct resource *res;
-	int ret;
+	int ret = 0;
 
 	spin_lock_init(&mcbsp->lock);
 	mcbsp->free = true;
@@ -682,7 +686,7 @@ static int omap_mcbsp_init(struct platform_device *pdev)
 	mcbsp->dma_data[1].addr = omap_mcbsp_dma_reg_params(mcbsp,
 						SNDRV_PCM_STREAM_CAPTURE);
 
-	mcbsp->fclk = devm_clk_get(&pdev->dev, "fck");
+	mcbsp->fclk = clk_get(&pdev->dev, "fck");
 	if (IS_ERR(mcbsp->fclk)) {
 		ret = PTR_ERR(mcbsp->fclk);
 		dev_err(mcbsp->dev, "unable to get fck: %d\n", ret);
@@ -702,15 +706,27 @@ static int omap_mcbsp_init(struct platform_device *pdev)
 		mcbsp->max_tx_thres = max_thres(mcbsp) - 0x10;
 		mcbsp->max_rx_thres = max_thres(mcbsp) - 0x10;
 
-		ret = devm_device_add_group(mcbsp->dev, &additional_attr_group);
+		ret = sysfs_create_group(&mcbsp->dev->kobj,
+					 &additional_attr_group);
 		if (ret) {
 			dev_err(mcbsp->dev,
 				"Unable to create additional controls\n");
-			return ret;
+			goto err_thres;
 		}
 	}
 
-	return omap_mcbsp_st_init(pdev);
+	ret = omap_mcbsp_st_init(pdev);
+	if (ret)
+		goto err_st;
+
+	return 0;
+
+err_st:
+	if (mcbsp->pdata->buffer_size)
+		sysfs_remove_group(&mcbsp->dev->kobj, &additional_attr_group);
+err_thres:
+	clk_put(mcbsp->fclk);
+	return ret;
 }
 
 /*
@@ -720,8 +736,8 @@ static int omap_mcbsp_init(struct platform_device *pdev)
 static void omap_mcbsp_set_threshold(struct snd_pcm_substream *substream,
 		unsigned int packet_size)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct omap_mcbsp *mcbsp = snd_soc_dai_get_drvdata(cpu_dai);
 	int words;
 
@@ -772,7 +788,7 @@ static int omap_mcbsp_dai_startup(struct snd_pcm_substream *substream,
 	struct omap_mcbsp *mcbsp = snd_soc_dai_get_drvdata(cpu_dai);
 	int err = 0;
 
-	if (!snd_soc_dai_active(cpu_dai))
+	if (!cpu_dai->active)
 		err = omap_mcbsp_request(mcbsp);
 
 	/*
@@ -820,14 +836,14 @@ static void omap_mcbsp_dai_shutdown(struct snd_pcm_substream *substream,
 	int stream2 = tx ? SNDRV_PCM_STREAM_CAPTURE : SNDRV_PCM_STREAM_PLAYBACK;
 
 	if (mcbsp->latency[stream2])
-		cpu_latency_qos_update_request(&mcbsp->pm_qos_req,
-					       mcbsp->latency[stream2]);
+		pm_qos_update_request(&mcbsp->pm_qos_req,
+				      mcbsp->latency[stream2]);
 	else if (mcbsp->latency[stream1])
-		cpu_latency_qos_remove_request(&mcbsp->pm_qos_req);
+		pm_qos_remove_request(&mcbsp->pm_qos_req);
 
 	mcbsp->latency[stream1] = 0;
 
-	if (!snd_soc_dai_active(cpu_dai)) {
+	if (!cpu_dai->active) {
 		omap_mcbsp_free(mcbsp);
 		mcbsp->configured = 0;
 	}
@@ -847,10 +863,10 @@ static int omap_mcbsp_dai_prepare(struct snd_pcm_substream *substream,
 	if (!latency || mcbsp->latency[stream1] < latency)
 		latency = mcbsp->latency[stream1];
 
-	if (cpu_latency_qos_request_active(pm_qos_req))
-		cpu_latency_qos_update_request(pm_qos_req, latency);
+	if (pm_qos_request_active(pm_qos_req))
+		pm_qos_update_request(pm_qos_req, latency);
 	else if (latency)
-		cpu_latency_qos_add_request(pm_qos_req, latency);
+		pm_qos_add_request(pm_qos_req, PM_QOS_CPU_DMA_LATENCY, latency);
 
 	return 0;
 }
@@ -885,8 +901,8 @@ static snd_pcm_sframes_t omap_mcbsp_dai_delay(
 			struct snd_pcm_substream *substream,
 			struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
 	struct omap_mcbsp *mcbsp = snd_soc_dai_get_drvdata(cpu_dai);
 	u16 fifo_use;
 	snd_pcm_sframes_t delay;
@@ -1026,8 +1042,8 @@ static int omap_mcbsp_dai_hw_params(struct snd_pcm_substream *substream,
 
 	/* In McBSP master modes, FRAME (i.e. sample rate) is generated
 	 * by _counting_ BCLKs. Calculate frame size in BCLKs */
-	master = mcbsp->fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK;
-	if (master == SND_SOC_DAIFMT_BP_FP) {
+	master = mcbsp->fmt & SND_SOC_DAIFMT_MASTER_MASK;
+	if (master ==	SND_SOC_DAIFMT_CBS_CFS) {
 		div = mcbsp->clk_div ? mcbsp->clk_div : 1;
 		framesize = (mcbsp->in_freq / div) / params_rate(params);
 
@@ -1126,20 +1142,20 @@ static int omap_mcbsp_dai_set_dai_fmt(struct snd_soc_dai *cpu_dai,
 		return -EINVAL;
 	}
 
-	switch (fmt & SND_SOC_DAIFMT_CLOCK_PROVIDER_MASK) {
-	case SND_SOC_DAIFMT_BP_FP:
+	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
+	case SND_SOC_DAIFMT_CBS_CFS:
 		/* McBSP master. Set FS and bit clocks as outputs */
 		regs->pcr0	|= FSXM | FSRM |
 				   CLKXM | CLKRM;
 		/* Sample rate generator drives the FS */
 		regs->srgr2	|= FSGM;
 		break;
-	case SND_SOC_DAIFMT_BC_FP:
+	case SND_SOC_DAIFMT_CBM_CFS:
 		/* McBSP slave. FS clock as output */
 		regs->srgr2	|= FSGM;
 		regs->pcr0	|= FSXM | FSRM;
 		break;
-	case SND_SOC_DAIFMT_BC_FC:
+	case SND_SOC_DAIFMT_CBM_CFM:
 		/* McBSP slave */
 		break;
 	default:
@@ -1169,7 +1185,7 @@ static int omap_mcbsp_dai_set_dai_fmt(struct snd_soc_dai *cpu_dai,
 	default:
 		return -EINVAL;
 	}
-	if (inv_fs)
+	if (inv_fs == true)
 		regs->pcr0 ^= FSXP | FSRP;
 
 	return 0;
@@ -1307,8 +1323,7 @@ static struct snd_soc_dai_driver omap_mcbsp_dai = {
 };
 
 static const struct snd_soc_component_driver omap_mcbsp_component = {
-	.name			= "omap-mcbsp",
-	.legacy_dai_naming	= 1,
+	.name		= "omap-mcbsp",
 };
 
 static struct omap_mcbsp_platform_data omap2420_pdata = {
@@ -1412,15 +1427,24 @@ static int asoc_mcbsp_probe(struct platform_device *pdev)
 	return sdma_pcm_platform_register(&pdev->dev, "tx", "rx");
 }
 
-static void asoc_mcbsp_remove(struct platform_device *pdev)
+static int asoc_mcbsp_remove(struct platform_device *pdev)
 {
 	struct omap_mcbsp *mcbsp = platform_get_drvdata(pdev);
 
 	if (mcbsp->pdata->ops && mcbsp->pdata->ops->free)
 		mcbsp->pdata->ops->free(mcbsp->id);
 
-	if (cpu_latency_qos_request_active(&mcbsp->pm_qos_req))
-		cpu_latency_qos_remove_request(&mcbsp->pm_qos_req);
+	if (pm_qos_request_active(&mcbsp->pm_qos_req))
+		pm_qos_remove_request(&mcbsp->pm_qos_req);
+
+	if (mcbsp->pdata->buffer_size)
+		sysfs_remove_group(&mcbsp->dev->kobj, &additional_attr_group);
+
+	omap_mcbsp_st_cleanup(pdev);
+
+	clk_put(mcbsp->fclk);
+
+	return 0;
 }
 
 static struct platform_driver asoc_mcbsp_driver = {
@@ -1430,7 +1454,7 @@ static struct platform_driver asoc_mcbsp_driver = {
 	},
 
 	.probe = asoc_mcbsp_probe,
-	.remove_new = asoc_mcbsp_remove,
+	.remove = asoc_mcbsp_remove,
 };
 
 module_platform_driver(asoc_mcbsp_driver);

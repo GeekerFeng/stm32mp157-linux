@@ -21,10 +21,8 @@
 #include <linux/platform_data/cros_ec_proto.h>
 #include <linux/platform_device.h>
 #include <linux/printk.h>
-#include <linux/reboot.h>
 #include <linux/suspend.h>
 
-#include "cros_ec.h"
 #include "cros_ec_lpc_mec.h"
 
 #define DRV_NAME "cros_ec_lpcs"
@@ -148,8 +146,6 @@ static int cros_ec_pkt_xfer_lpc(struct cros_ec_device *ec,
 	u8 *dout;
 
 	ret = cros_ec_prepare_tx(ec, msg);
-	if (ret < 0)
-		goto done;
 
 	/* Write buffer */
 	cros_ec_lpc_ops.write(EC_LPC_ADDR_HOST_PACKET, ret, ec->dout);
@@ -159,7 +155,7 @@ static int cros_ec_pkt_xfer_lpc(struct cros_ec_device *ec,
 	cros_ec_lpc_ops.write(EC_LPC_ADDR_HOST_CMD, 1, &sum);
 
 	if (ec_response_timed_out()) {
-		dev_warn(ec->dev, "EC response timed out\n");
+		dev_warn(ec->dev, "EC responsed timed out\n");
 		ret = -EIO;
 		goto done;
 	}
@@ -241,7 +237,7 @@ static int cros_ec_cmd_xfer_lpc(struct cros_ec_device *ec,
 	cros_ec_lpc_ops.write(EC_LPC_ADDR_HOST_CMD, 1, &sum);
 
 	if (ec_response_timed_out()) {
-		dev_warn(ec->dev, "EC response timed out\n");
+		dev_warn(ec->dev, "EC responsed timed out\n");
 		ret = -EIO;
 		goto done;
 	}
@@ -316,29 +312,11 @@ static int cros_ec_lpc_readmem(struct cros_ec_device *ec, unsigned int offset,
 static void cros_ec_lpc_acpi_notify(acpi_handle device, u32 value, void *data)
 {
 	struct cros_ec_device *ec_dev = data;
-	bool ec_has_more_events;
-	int ret;
 
-	ec_dev->last_event_time = cros_ec_get_time_ns();
-
-	if (value == ACPI_NOTIFY_CROS_EC_PANIC) {
-		dev_emerg(ec_dev->dev, "CrOS EC Panic Reported. Shutdown is imminent!");
-		blocking_notifier_call_chain(&ec_dev->panic_notifier, 0, ec_dev);
-		/* Begin orderly shutdown. Force shutdown after 1 second. */
-		hw_protection_shutdown("CrOS EC Panic", 1000);
-		/* Do not query for other events after a panic is reported */
-		return;
-	}
-
-	if (ec_dev->mkbp_event_supported)
-		do {
-			ret = cros_ec_get_next_event(ec_dev, NULL,
-						     &ec_has_more_events);
-			if (ret > 0)
-				blocking_notifier_call_chain(
-						&ec_dev->event_notifier, 0,
-						ec_dev);
-		} while (ec_has_more_events);
+	if (ec_dev->mkbp_event_supported &&
+	    cros_ec_get_next_event(ec_dev, NULL) > 0)
+		blocking_notifier_call_chain(&ec_dev->event_notifier, 0,
+					     ec_dev);
 
 	if (value == ACPI_NOTIFY_DEVICE_WAKE)
 		pm_system_wakeup();
@@ -350,22 +328,14 @@ static int cros_ec_lpc_probe(struct platform_device *pdev)
 	struct acpi_device *adev;
 	acpi_status status;
 	struct cros_ec_device *ec_dev;
-	u8 buf[2] = {};
+	u8 buf[2];
 	int irq, ret;
 
-	/*
-	 * The Framework Laptop (and possibly other non-ChromeOS devices)
-	 * only exposes the eight I/O ports that are required for the Microchip EC.
-	 * Requesting a larger reservation will fail.
-	 */
-	if (!devm_request_region(dev, EC_HOST_CMD_REGION0,
-				 EC_HOST_CMD_MEC_REGION_SIZE, dev_name(dev))) {
-		dev_err(dev, "couldn't reserve MEC region\n");
+	if (!devm_request_region(dev, EC_LPC_ADDR_MEMMAP, EC_MEMMAP_SIZE,
+				 dev_name(dev))) {
+		dev_err(dev, "couldn't reserve memmap region\n");
 		return -EBUSY;
 	}
-
-	cros_ec_lpc_mec_init(EC_HOST_CMD_REGION0,
-			     EC_LPC_ADDR_MEMMAP + EC_MEMMAP_SIZE);
 
 	/*
 	 * Read the mapped ID twice, the first one is assuming the
@@ -377,12 +347,6 @@ static int cros_ec_lpc_probe(struct platform_device *pdev)
 	cros_ec_lpc_ops.write = cros_ec_lpc_mec_write_bytes;
 	cros_ec_lpc_ops.read(EC_LPC_ADDR_MEMMAP + EC_MEMMAP_ID, 2, buf);
 	if (buf[0] != 'E' || buf[1] != 'C') {
-		if (!devm_request_region(dev, EC_LPC_ADDR_MEMMAP, EC_MEMMAP_SIZE,
-					 dev_name(dev))) {
-			dev_err(dev, "couldn't reserve memmap region\n");
-			return -EBUSY;
-		}
-
 		/* Re-assign read/write operations for the non MEC variant */
 		cros_ec_lpc_ops.read = cros_ec_lpc_read_bytes;
 		cros_ec_lpc_ops.write = cros_ec_lpc_write_bytes;
@@ -392,19 +356,17 @@ static int cros_ec_lpc_probe(struct platform_device *pdev)
 			dev_err(dev, "EC ID not detected\n");
 			return -ENODEV;
 		}
+	}
 
-		/* Reserve the remaining I/O ports required by the non-MEC protocol. */
-		if (!devm_request_region(dev, EC_HOST_CMD_REGION0 + EC_HOST_CMD_MEC_REGION_SIZE,
-					 EC_HOST_CMD_REGION_SIZE - EC_HOST_CMD_MEC_REGION_SIZE,
-					 dev_name(dev))) {
-			dev_err(dev, "couldn't reserve remainder of region0\n");
-			return -EBUSY;
-		}
-		if (!devm_request_region(dev, EC_HOST_CMD_REGION1,
-					 EC_HOST_CMD_REGION_SIZE, dev_name(dev))) {
-			dev_err(dev, "couldn't reserve region1\n");
-			return -EBUSY;
-		}
+	if (!devm_request_region(dev, EC_HOST_CMD_REGION0,
+				 EC_HOST_CMD_REGION_SIZE, dev_name(dev))) {
+		dev_err(dev, "couldn't reserve region0\n");
+		return -EBUSY;
+	}
+	if (!devm_request_region(dev, EC_HOST_CMD_REGION1,
+				 EC_HOST_CMD_REGION_SIZE, dev_name(dev))) {
+		dev_err(dev, "couldn't reserve region1\n");
+		return -EBUSY;
 	}
 
 	ec_dev = devm_kzalloc(dev, sizeof(*ec_dev), GFP_KERNEL);
@@ -425,7 +387,7 @@ static int cros_ec_lpc_probe(struct platform_device *pdev)
 	 * Some boards do not have an IRQ allotted for cros_ec_lpc,
 	 * which makes ENXIO an expected (and safe) scenario.
 	 */
-	irq = platform_get_irq_optional(pdev, 0);
+	irq = platform_get_irq(pdev, 0);
 	if (irq > 0)
 		ec_dev->irq = irq;
 	else if (irq != -ENXIO) {
@@ -467,9 +429,7 @@ static int cros_ec_lpc_remove(struct platform_device *pdev)
 		acpi_remove_notify_handler(adev->handle, ACPI_ALL_NOTIFY,
 					   cros_ec_lpc_acpi_notify);
 
-	cros_ec_unregister(ec_dev);
-
-	return 0;
+	return cros_ec_unregister(ec_dev);
 }
 
 static const struct acpi_device_id cros_ec_lpc_acpi_device_ids[] = {
@@ -530,14 +490,6 @@ static const struct dmi_system_id cros_ec_lpc_dmi_table[] __initconst = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Glimmer"),
 		},
 	},
-	/* A small number of non-Chromebook/box machines also use the ChromeOS EC */
-	{
-		/* the Framework Laptop */
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "Framework"),
-			DMI_MATCH(DMI_PRODUCT_NAME, "Laptop"),
-		},
-	},
 	{ /* sentinel */ }
 };
 MODULE_DEVICE_TABLE(dmi, cros_ec_lpc_dmi_table);
@@ -567,12 +519,6 @@ static struct platform_driver cros_ec_lpc_driver = {
 		.name = DRV_NAME,
 		.acpi_match_table = cros_ec_lpc_acpi_device_ids,
 		.pm = &cros_ec_lpc_pm_ops,
-		/*
-		 * ACPI child devices may probe before us, and they racily
-		 * check our drvdata pointer. Force synchronous probe until
-		 * those races are resolved.
-		 */
-		.probe_type = PROBE_FORCE_SYNCHRONOUS,
 	},
 	.probe = cros_ec_lpc_probe,
 	.remove = cros_ec_lpc_remove,
@@ -605,10 +551,14 @@ static int __init cros_ec_lpc_init(void)
 		return -ENODEV;
 	}
 
+	cros_ec_lpc_mec_init(EC_HOST_CMD_REGION0,
+			     EC_LPC_ADDR_MEMMAP + EC_MEMMAP_SIZE);
+
 	/* Register the driver */
 	ret = platform_driver_register(&cros_ec_lpc_driver);
 	if (ret) {
 		pr_err(DRV_NAME ": can't register driver: %d\n", ret);
+		cros_ec_lpc_mec_destroy();
 		return ret;
 	}
 
@@ -618,6 +568,7 @@ static int __init cros_ec_lpc_init(void)
 		if (ret) {
 			pr_err(DRV_NAME ": can't register device: %d\n", ret);
 			platform_driver_unregister(&cros_ec_lpc_driver);
+			cros_ec_lpc_mec_destroy();
 		}
 	}
 
@@ -629,6 +580,7 @@ static void __exit cros_ec_lpc_exit(void)
 	if (!cros_ec_lpc_acpi_device_found)
 		platform_device_unregister(&cros_ec_lpc_device);
 	platform_driver_unregister(&cros_ec_lpc_driver);
+	cros_ec_lpc_mec_destroy();
 }
 
 module_init(cros_ec_lpc_init);

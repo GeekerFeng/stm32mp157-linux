@@ -27,10 +27,9 @@
 	    "audit_control", "setfcap"
 
 #define COMMON_CAP2_PERMS  "mac_override", "mac_admin", "syslog", \
-		"wake_alarm", "block_suspend", "audit_read", "perfmon", "bpf", \
-		"checkpoint_restore"
+		"wake_alarm", "block_suspend", "audit_read"
 
-#if CAP_LAST_CAP > CAP_CHECKPOINT_RESTORE
+#if CAP_LAST_CAP > CAP_AUDIT_READ
 #error New capability defined, please update COMMON_CAP2_PERMS.
 #endif
 
@@ -38,7 +37,7 @@
  * Note: The name for any socket class should be suffixed by "socket",
  *	 and doesn't contain more than one substr of "socket".
  */
-const struct security_class_mapping secclass_map[] = {
+struct security_class_mapping secclass_map[] = {
 	{ "security",
 	  { "compute_av", "compute_create", "compute_member",
 	    "check_context", "load_policy", "compute_relabel",
@@ -242,23 +241,12 @@ const struct security_class_mapping secclass_map[] = {
 	{ "infiniband_endport",
 	  { "manage_subnet", NULL } },
 	{ "bpf",
-	  { "map_create", "map_read", "map_write", "prog_load", "prog_run",
-	    NULL } },
+	  {"map_create", "map_read", "map_write", "prog_load", "prog_run"} },
 	{ "xdp_socket",
 	  { COMMON_SOCK_PERMS, NULL } },
-	{ "mctp_socket",
-	  { COMMON_SOCK_PERMS, NULL } },
-	{ "perf_event",
-	  { "open", "cpu", "kernel", "tracepoint", "read", "write", NULL } },
-	{ "anon_inode",
-	  { COMMON_FILE_PERMS, NULL } },
-	{ "io_uring",
-	  { "override_creds", "sqpoll", "cmd", NULL } },
-	{ "user_namespace",
-	  { "create", NULL } },
 	{ NULL }
   };
 
-#if PF_MAX > 46
+#if PF_MAX > 45
 #error New address family defined, please update secclass_map.
 #endif

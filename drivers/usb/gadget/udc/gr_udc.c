@@ -8,7 +8,7 @@
  * GRLIB VHDL IP core library.
  *
  * Full documentation of the GRUSBDC core can be found here:
- * https://www.gaisler.com/products/grlib/grip.pdf
+ * http://www.gaisler.com/products/grlib/grip.pdf
  *
  * Contributors:
  * - Andreas Larsson <andreas@gaisler.com>
@@ -29,7 +29,6 @@
 #include <linux/list.h>
 #include <linux/interrupt.h>
 #include <linux/device.h>
-#include <linux/usb.h>
 #include <linux/usb/ch9.h>
 #include <linux/usb/gadget.h>
 #include <linux/dma-mapping.h>
@@ -48,6 +47,7 @@
 #define	DRIVER_DESC	"Aeroflex Gaisler GRUSBDC USB Peripheral Controller"
 
 static const char driver_name[] = DRIVER_NAME;
+static const char driver_desc[] = DRIVER_DESC;
 
 #define gr_read32(x) (ioread32be((x)))
 #define gr_write32(x, v) (iowrite32be((v), (x)))
@@ -207,15 +207,14 @@ DEFINE_SHOW_ATTRIBUTE(gr_dfs);
 static void gr_dfs_create(struct gr_udc *dev)
 {
 	const char *name = "gr_udc_state";
-	struct dentry *root;
 
-	root = debugfs_create_dir(dev_name(dev->dev), usb_debug_root);
-	debugfs_create_file(name, 0444, root, dev, &gr_dfs_fops);
+	dev->dfs_root = debugfs_create_dir(dev_name(dev->dev), NULL);
+	debugfs_create_file(name, 0444, dev->dfs_root, dev, &gr_dfs_fops);
 }
 
 static void gr_dfs_delete(struct gr_udc *dev)
 {
-	debugfs_lookup_and_remove(dev_name(dev->dev), usb_debug_root);
+	debugfs_remove_recursive(dev->dfs_root);
 }
 
 #else /* !CONFIG_USB_GADGET_DEBUG_FS */
@@ -913,9 +912,9 @@ static int gr_device_request(struct gr_udc *dev, u8 type, u8 request,
 			return gr_ep0_respond_empty(dev);
 
 		case USB_DEVICE_TEST_MODE:
-			/* The hardware does not support USB_TEST_FORCE_ENABLE */
+			/* The hardware does not support TEST_FORCE_EN */
 			test = index >> 8;
-			if (test >= USB_TEST_J && test <= USB_TEST_PACKET) {
+			if (test >= TEST_J && test <= TEST_PACKET) {
 				dev->test_mode = test;
 				return gr_ep0_respond(dev, NULL, 0,
 						      gr_ep0_testmode_complete);
@@ -1690,7 +1689,7 @@ static int gr_queue_ext(struct usb_ep *_ep, struct usb_request *_req,
 /* Dequeue JUST ONE request */
 static int gr_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 {
-	struct gr_request *req = NULL, *iter;
+	struct gr_request *req;
 	struct gr_ep *ep;
 	struct gr_udc *dev;
 	int ret = 0;
@@ -1710,13 +1709,11 @@ static int gr_dequeue(struct usb_ep *_ep, struct usb_request *_req)
 	spin_lock_irqsave(&dev->lock, flags);
 
 	/* Make sure it's actually queued on this endpoint */
-	list_for_each_entry(iter, &ep->queue, queue) {
-		if (&iter->req != _req)
-			continue;
-		req = iter;
-		break;
+	list_for_each_entry(req, &ep->queue, queue) {
+		if (&req->req == _req)
+			break;
 	}
-	if (!req) {
+	if (&req->req != _req) {
 		ret = -EINVAL;
 		goto out;
 	}
@@ -1906,6 +1903,7 @@ static int gr_udc_start(struct usb_gadget *gadget,
 	spin_lock(&dev->lock);
 
 	/* Hook up the driver */
+	driver->driver.bus = NULL;
 	dev->driver = driver;
 
 	/* Get ready for host detection */
@@ -1982,12 +1980,9 @@ static int gr_ep_init(struct gr_udc *dev, int num, int is_in, u32 maxplimit)
 
 	if (num == 0) {
 		_req = gr_alloc_request(&ep->ep, GFP_ATOMIC);
-		if (!_req)
-			return -ENOMEM;
-
 		buf = devm_kzalloc(dev->dev, PAGE_SIZE, GFP_DMA | GFP_ATOMIC);
-		if (!buf) {
-			gr_free_request(&ep->ep, _req);
+		if (!_req || !buf) {
+			/* possible _req freed by gr_probe via gr_remove */
 			return -ENOMEM;
 		}
 
@@ -2123,6 +2118,7 @@ static int gr_request_irq(struct gr_udc *dev, int irq)
 static int gr_probe(struct platform_device *pdev)
 {
 	struct gr_udc *dev;
+	struct resource *res;
 	struct gr_regs __iomem *regs;
 	int retval;
 	u32 status;
@@ -2132,7 +2128,8 @@ static int gr_probe(struct platform_device *pdev)
 		return -ENOMEM;
 	dev->dev = &pdev->dev;
 
-	regs = devm_platform_ioremap_resource(pdev, 0);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	regs = devm_ioremap_resource(dev->dev, res);
 	if (IS_ERR(regs))
 		return PTR_ERR(regs);
 

@@ -175,10 +175,6 @@
  *                     Moved FW image definitions ionto new mpi2_image,h
  * 08-14-18   02.00.36 Fixed definition of MPI2_FW_DOWNLOAD_ITYPE_PSOC (0x16)
  * 09-07-18   02.00.37 Added MPI26_EVENT_PCIE_TOPO_PI_16_LANES
- * 10-02-19   02.00.38 Added MPI26_IOCINIT_CFGFLAGS_COREDUMP_ENABLE
- *                     Added MPI26_IOCFACTS_CAPABILITY_COREDUMP_ENABLED
- *                     Added MPI2_FW_DOWNLOAD_ITYPE_COREDUMP
- *                     Added MPI2_FW_UPLOAD_ITYPE_COREDUMP
  * --------------------------------------------------------------------------
  */
 
@@ -252,7 +248,6 @@ typedef struct _MPI2_IOC_INIT_REQUEST {
 
 /*ConfigurationFlags */
 #define MPI26_IOCINIT_CFGFLAGS_NVME_SGL_FORMAT  (0x0001)
-#define MPI26_IOCINIT_CFGFLAGS_COREDUMP_ENABLE  (0x0002)
 
 /*minimum depth for a Reply Descriptor Post Queue */
 #define MPI2_RDPQ_DEPTH_MIN                     (16)
@@ -382,7 +377,6 @@ typedef struct _MPI2_IOC_FACTS_REPLY {
 /*ProductID field uses MPI2_FW_HEADER_PID_ */
 
 /*IOCCapabilities */
-#define MPI26_IOCFACTS_CAPABILITY_COREDUMP_ENABLED      (0x00200000)
 #define MPI26_IOCFACTS_CAPABILITY_PCIE_SRIOV            (0x00100000)
 #define MPI26_IOCFACTS_CAPABILITY_ATOMIC_REQ            (0x00080000)
 #define MPI2_IOCFACTS_CAPABILITY_RDPQ_ARRAY_CAPABLE     (0x00040000)
@@ -537,7 +531,7 @@ typedef struct _MPI2_EVENT_NOTIFICATION_REPLY {
 	U16 Event;		/*0x14 */
 	U16 Reserved4;		/*0x16 */
 	U32 EventContext;	/*0x18 */
-	U32 EventData[];	/*0x1C */
+	U32 EventData[1];	/*0x1C */
 } MPI2_EVENT_NOTIFICATION_REPLY, *PTR_MPI2_EVENT_NOTIFICATION_REPLY,
 	Mpi2EventNotificationReply_t,
 	*pMpi2EventNotificationReply_t;
@@ -639,7 +633,7 @@ typedef struct _MPI2_EVENT_DATA_HOST_MESSAGE {
 	U8 Reserved1;		/*0x01 */
 	U16 Reserved2;		/*0x02 */
 	U32 Reserved3;		/*0x04 */
-	U32 HostData[];		/*0x08 */
+	U32 HostData[1];	/*0x08 */
 } MPI2_EVENT_DATA_HOST_MESSAGE, *PTR_MPI2_EVENT_DATA_HOST_MESSAGE,
 	Mpi2EventDataHostMessage_t, *pMpi2EventDataHostMessage_t;
 
@@ -1397,7 +1391,7 @@ typedef struct _MPI2_SEND_HOST_MESSAGE_REQUEST {
 	U32 Reserved8;		/*0x18 */
 	U32 Reserved9;		/*0x1C */
 	U32 Reserved10;		/*0x20 */
-	U32 HostData[];		/*0x24 */
+	U32 HostData[1];	/*0x24 */
 } MPI2_SEND_HOST_MESSAGE_REQUEST,
 	*PTR_MPI2_SEND_HOST_MESSAGE_REQUEST,
 	Mpi2SendHostMessageRequest_t,
@@ -1464,8 +1458,8 @@ typedef struct _MPI2_FW_DOWNLOAD_REQUEST {
 /*MPI v2.6 and newer */
 #define MPI2_FW_DOWNLOAD_ITYPE_CPLD                 (0x15)
 #define MPI2_FW_DOWNLOAD_ITYPE_PSOC                 (0x16)
-#define MPI2_FW_DOWNLOAD_ITYPE_COREDUMP             (0x17)
 #define MPI2_FW_DOWNLOAD_ITYPE_MIN_PRODUCT_SPECIFIC (0xF0)
+#define MPI2_FW_DOWNLOAD_ITYPE_TERMINATE            (0xFF)
 
 /*MPI v2.0 FWDownload TransactionContext Element */
 typedef struct _MPI2_FW_DOWNLOAD_TCSGE {

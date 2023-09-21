@@ -57,7 +57,6 @@ static const char version[] =
 #include <linux/kernel.h>
 #include <linux/sched.h>
 #include <linux/delay.h>
-#include <linux/gpio/consumer.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/errno.h>
@@ -70,6 +69,7 @@ static const char version[] =
 #include <linux/workqueue.h>
 #include <linux/of.h>
 #include <linux/of_device.h>
+#include <linux/of_gpio.h>
 
 #include <linux/netdevice.h>
 #include <linux/etherdevice.h>
@@ -535,10 +535,10 @@ static inline void  smc_rcv(struct net_device *dev)
 /*
  * This is called to actually send a packet to the chip.
  */
-static void smc_hardware_send_pkt(struct tasklet_struct *t)
+static void smc_hardware_send_pkt(unsigned long data)
 {
-	struct smc_local *lp = from_tasklet(lp, t, tx_task);
-	struct net_device *dev = lp->dev;
+	struct net_device *dev = (struct net_device *)data;
+	struct smc_local *lp = netdev_priv(dev);
 	void __iomem *ioaddr = lp->base;
 	struct sk_buff *skb;
 	unsigned int packet_no, len;
@@ -671,24 +671,24 @@ smc_hard_start_xmit(struct sk_buff *skb, struct net_device *dev)
 		status = SMC_GET_INT(lp);
 		if (status & IM_ALLOC_INT) {
 			SMC_ACK_INT(lp, IM_ALLOC_INT);
-			break;
+  			break;
 		}
-	} while (--poll_count);
+   	} while (--poll_count);
 
 	smc_special_unlock(&lp->lock, flags);
 
 	lp->pending_tx_skb = skb;
-	if (!poll_count) {
+   	if (!poll_count) {
 		/* oh well, wait until the chip finds memory later */
 		netif_stop_queue(dev);
 		DBG(2, dev, "TX memory allocation deferred.\n");
 		SMC_ENABLE_INT(lp, IM_ALLOC_INT);
-	} else {
+   	} else {
 		/*
 		 * Allocation succeeded: push packet to the chip's own memory
 		 * immediately.
 		 */
-		smc_hardware_send_pkt(&lp->tx_task);
+		smc_hardware_send_pkt((unsigned long)dev);
 	}
 
 	return NETDEV_TX_OK;
@@ -703,8 +703,7 @@ static void smc_tx(struct net_device *dev)
 {
 	struct smc_local *lp = netdev_priv(dev);
 	void __iomem *ioaddr = lp->base;
-	unsigned int saved_packet, packet_no, tx_status;
-	unsigned int pkt_len __always_unused;
+	unsigned int saved_packet, packet_no, tx_status, pkt_len;
 
 	DBG(3, dev, "%s\n", __func__);
 
@@ -1037,6 +1036,7 @@ static void smc_phy_configure(struct work_struct *work)
 	int phyaddr = lp->mii.phy_id;
 	int my_phy_caps; /* My PHY capabilities */
 	int my_ad_caps; /* My Advertised capabilities */
+	int status;
 
 	DBG(3, dev, "smc_program_phy()\n");
 
@@ -1110,7 +1110,7 @@ static void smc_phy_configure(struct work_struct *work)
 	 * auto-negotiation is restarted, sometimes it isn't ready and
 	 * the link does not come up.
 	 */
-	smc_phy_read(dev, phyaddr, MII_ADVERTISE);
+	status = smc_phy_read(dev, phyaddr, MII_ADVERTISE);
 
 	DBG(2, dev, "phy caps=%x\n", my_phy_caps);
 	DBG(2, dev, "phy advertised caps=%x\n", my_ad_caps);
@@ -1321,7 +1321,7 @@ static void smc_poll_controller(struct net_device *dev)
 #endif
 
 /* Our watchdog timed out. Called by the networking layer */
-static void smc_timeout(struct net_device *dev, unsigned int txqueue)
+static void smc_timeout(struct net_device *dev)
 {
 	struct smc_local *lp = netdev_priv(dev);
 	void __iomem *ioaddr = lp->base;
@@ -1588,9 +1588,9 @@ smc_ethtool_set_link_ksettings(struct net_device *dev,
 static void
 smc_ethtool_getdrvinfo(struct net_device *dev, struct ethtool_drvinfo *info)
 {
-	strscpy(info->driver, CARDNAME, sizeof(info->driver));
-	strscpy(info->version, version, sizeof(info->version));
-	strscpy(info->bus_info, dev_name(dev->dev.parent),
+	strlcpy(info->driver, CARDNAME, sizeof(info->driver));
+	strlcpy(info->version, version, sizeof(info->version));
+	strlcpy(info->bus_info, dev_name(dev->dev.parent),
 		sizeof(info->bus_info));
 }
 
@@ -1790,7 +1790,7 @@ static int smc_findirq(struct smc_local *lp)
 	SMC_SET_INT_MASK(lp, IM_ALLOC_INT);
 
 	/*
-	 * Allocate 512 bytes of memory.  Note that the chip was just
+ 	 * Allocate 512 bytes of memory.  Note that the chip was just
 	 * reset so all the memory is available
 	 */
 	SMC_SET_MMU_CMD(lp, MC_ALLOC | 1);
@@ -1851,7 +1851,6 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 	int retval;
 	unsigned int val, revision_register;
 	const char *version_string;
-	u8 addr[ETH_ALEN];
 
 	DBG(2, dev, "%s: %s\n", CARDNAME, __func__);
 
@@ -1923,8 +1922,7 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 
 	/* Get the MAC address */
 	SMC_SELECT_BANK(lp, 1);
-	SMC_GET_MAC_ADDR(lp, addr);
-	eth_hw_addr_set(dev, addr);
+	SMC_GET_MAC_ADDR(lp, dev->dev_addr);
 
 	/* now, reset the chip, and put it into a known state */
 	smc_reset(dev);
@@ -1967,7 +1965,7 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 	dev->netdev_ops = &smc_netdev_ops;
 	dev->ethtool_ops = &smc_ethtool_ops;
 
-	tasklet_setup(&lp->tx_task, smc_hardware_send_pkt);
+	tasklet_init(&lp->tx_task, smc_hardware_send_pkt, (unsigned long)dev);
 	INIT_WORK(&lp->phy_configure, smc_phy_configure);
 	lp->dev = dev;
 	lp->mii.phy_id_mask = 0x1f;
@@ -2000,8 +1998,8 @@ static int smc_probe(struct net_device *dev, void __iomem *ioaddr,
 
 	/* Grab the IRQ */
 	retval = request_irq(dev->irq, smc_interrupt, irq_flags, dev->name, dev);
-	if (retval)
-		goto err_out;
+      	if (retval)
+      		goto err_out;
 
 #ifdef CONFIG_ARCH_PXA
 #  ifdef SMC_USE_PXA_DMA
@@ -2193,20 +2191,14 @@ static const struct of_device_id smc91x_match[] = {
 MODULE_DEVICE_TABLE(of, smc91x_match);
 
 /**
- * try_toggle_control_gpio - configure a gpio if it exists
- * @dev: net device
- * @desc: where to store the GPIO descriptor, if it exists
- * @name: name of the GPIO in DT
- * @index: index of the GPIO in DT
- * @value: set the GPIO to this value
- * @nsdelay: delay before setting the GPIO
+ * of_try_set_control_gpio - configure a gpio if it exists
  */
 static int try_toggle_control_gpio(struct device *dev,
 				   struct gpio_desc **desc,
 				   const char *name, int index,
 				   int value, unsigned int nsdelay)
 {
-	struct gpio_desc *gpio;
+	struct gpio_desc *gpio = *desc;
 	enum gpiod_flags flags = value ? GPIOD_OUT_LOW : GPIOD_OUT_HIGH;
 
 	gpio = devm_gpiod_get_index_optional(dev, name, index, flags);
@@ -2282,7 +2274,7 @@ static int smc_drv_probe(struct platform_device *pdev)
 		ret = try_toggle_control_gpio(&pdev->dev, &lp->power_gpio,
 					      "power", 0, 0, 100);
 		if (ret)
-			goto out_free_netdev;
+			return ret;
 
 		/*
 		 * Optional reset GPIO configured? Minimum 100 ns reset needed
@@ -2291,7 +2283,7 @@ static int smc_drv_probe(struct platform_device *pdev)
 		ret = try_toggle_control_gpio(&pdev->dev, &lp->reset_gpio,
 					      "reset", 0, 0, 100);
 		if (ret)
-			goto out_free_netdev;
+			return ret;
 
 		/*
 		 * Need to wait for optional EEPROM to load, max 750 us according

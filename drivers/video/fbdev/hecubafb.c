@@ -115,7 +115,8 @@ static void hecubafb_dpy_update(struct hecubafb_par *par)
 }
 
 /* this is called back from the deferred io workqueue */
-static void hecubafb_dpy_deferred_io(struct fb_info *info, struct list_head *pagereflist)
+static void hecubafb_dpy_deferred_io(struct fb_info *info,
+				struct list_head *pagelist)
 {
 	hecubafb_dpy_update(info->par);
 }
@@ -196,14 +197,13 @@ static ssize_t hecubafb_write(struct fb_info *info, const char __user *buf,
 	return (err) ? err : count;
 }
 
-static const struct fb_ops hecubafb_ops = {
+static struct fb_ops hecubafb_ops = {
 	.owner		= THIS_MODULE,
 	.fb_read        = fb_sys_read,
 	.fb_write	= hecubafb_write,
 	.fb_fillrect	= hecubafb_fillrect,
 	.fb_copyarea	= hecubafb_copyarea,
 	.fb_imageblit	= hecubafb_imageblit,
-	.fb_mmap	= fb_deferred_io_mmap,
 };
 
 static struct fb_deferred_io hecubafb_defio = {
@@ -279,7 +279,7 @@ err_videomem_alloc:
 	return retval;
 }
 
-static void hecubafb_remove(struct platform_device *dev)
+static int hecubafb_remove(struct platform_device *dev)
 {
 	struct fb_info *info = platform_get_drvdata(dev);
 
@@ -293,11 +293,12 @@ static void hecubafb_remove(struct platform_device *dev)
 		module_put(par->board->owner);
 		framebuffer_release(info);
 	}
+	return 0;
 }
 
 static struct platform_driver hecubafb_driver = {
 	.probe	= hecubafb_probe,
-	.remove_new = hecubafb_remove,
+	.remove = hecubafb_remove,
 	.driver	= {
 		.name	= "hecubafb",
 	},

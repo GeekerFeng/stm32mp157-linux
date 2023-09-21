@@ -24,7 +24,6 @@ struct unwind_idx {
 
 struct unwind_table {
 	struct list_head list;
-	struct list_head mod_list;
 	const struct unwind_idx *start;
 	const struct unwind_idx *origin;
 	const struct unwind_idx *stop;
@@ -37,8 +36,7 @@ extern struct unwind_table *unwind_table_add(unsigned long start,
 					     unsigned long text_addr,
 					     unsigned long text_size);
 extern void unwind_table_del(struct unwind_table *tab);
-extern void unwind_backtrace(struct pt_regs *regs, struct task_struct *tsk,
-			     const char *loglvl);
+extern void unwind_backtrace(struct pt_regs *regs, struct task_struct *tsk);
 
 #endif	/* !__ASSEMBLY__ */
 

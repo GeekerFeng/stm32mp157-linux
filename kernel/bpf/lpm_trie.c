@@ -14,7 +14,6 @@
 #include <linux/vmalloc.h>
 #include <net/ipv6.h>
 #include <uapi/linux/btf.h>
-#include <linux/btf_ids.h>
 
 /* Intermediate node */
 #define LPM_TREE_NODE_FLAG_IM BIT(0)
@@ -26,7 +25,7 @@ struct lpm_trie_node {
 	struct lpm_trie_node __rcu	*child[2];
 	u32				prefixlen;
 	u32				flags;
-	u8				data[];
+	u8				data[0];
 };
 
 struct lpm_trie {
@@ -35,7 +34,7 @@ struct lpm_trie {
 	size_t				n_entries;
 	size_t				max_prefixlen;
 	size_t				data_size;
-	spinlock_t			lock;
+	raw_spinlock_t			lock;
 };
 
 /* This trie implements a longest prefix match algorithm that can be used to
@@ -233,8 +232,7 @@ static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 
 	/* Start walking the trie from the root node ... */
 
-	for (node = rcu_dereference_check(trie->root, rcu_read_lock_bh_held());
-	     node;) {
+	for (node = rcu_dereference(trie->root); node;) {
 		unsigned int next_bit;
 		size_t matchlen;
 
@@ -266,8 +264,7 @@ static void *trie_lookup_elem(struct bpf_map *map, void *_key)
 		 * traverse down.
 		 */
 		next_bit = extract_bit(key->data, node->prefixlen);
-		node = rcu_dereference_check(node->child[next_bit],
-					     rcu_read_lock_bh_held());
+		node = rcu_dereference(node->child[next_bit]);
 	}
 
 	if (!found)
@@ -285,8 +282,8 @@ static struct lpm_trie_node *lpm_trie_node_alloc(const struct lpm_trie *trie,
 	if (value)
 		size += trie->map.value_size;
 
-	node = bpf_map_kmalloc_node(&trie->map, size, GFP_NOWAIT | __GFP_NOWARN,
-				    trie->map.numa_node);
+	node = kmalloc_node(size, GFP_ATOMIC | __GFP_NOWARN,
+			    trie->map.numa_node);
 	if (!node)
 		return NULL;
 
@@ -300,8 +297,8 @@ static struct lpm_trie_node *lpm_trie_node_alloc(const struct lpm_trie *trie,
 }
 
 /* Called from syscall or from eBPF program */
-static long trie_update_elem(struct bpf_map *map,
-			     void *_key, void *value, u64 flags)
+static int trie_update_elem(struct bpf_map *map,
+			    void *_key, void *value, u64 flags)
 {
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
 	struct lpm_trie_node *node, *im_node = NULL, *new_node = NULL;
@@ -318,7 +315,7 @@ static long trie_update_elem(struct bpf_map *map,
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
-	spin_lock_irqsave(&trie->lock, irq_flags);
+	raw_spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Allocate and fill a new node */
 
@@ -413,7 +410,7 @@ static long trie_update_elem(struct bpf_map *map,
 		rcu_assign_pointer(im_node->child[1], node);
 	}
 
-	/* Finally, assign the intermediate node to the determined slot */
+	/* Finally, assign the intermediate node to the determined spot */
 	rcu_assign_pointer(*slot, im_node);
 
 out:
@@ -425,13 +422,13 @@ out:
 		kfree(im_node);
 	}
 
-	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 
 	return ret;
 }
 
 /* Called from syscall or from eBPF program */
-static long trie_delete_elem(struct bpf_map *map, void *_key)
+static int trie_delete_elem(struct bpf_map *map, void *_key)
 {
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
 	struct bpf_lpm_trie_key *key = _key;
@@ -445,7 +442,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	if (key->prefixlen > trie->max_prefixlen)
 		return -EINVAL;
 
-	spin_lock_irqsave(&trie->lock, irq_flags);
+	raw_spin_lock_irqsave(&trie->lock, irq_flags);
 
 	/* Walk the tree looking for an exact key/length match and keeping
 	 * track of the path we traverse.  We will need to know the node
@@ -521,7 +518,7 @@ static long trie_delete_elem(struct bpf_map *map, void *_key)
 	kfree_rcu(node, rcu);
 
 out:
-	spin_unlock_irqrestore(&trie->lock, irq_flags);
+	raw_spin_unlock_irqrestore(&trie->lock, irq_flags);
 
 	return ret;
 }
@@ -543,8 +540,10 @@ out:
 static struct bpf_map *trie_alloc(union bpf_attr *attr)
 {
 	struct lpm_trie *trie;
+	u64 cost = sizeof(*trie), cost_per_node;
+	int ret;
 
-	if (!bpf_capable())
+	if (!capable(CAP_SYS_ADMIN))
 		return ERR_PTR(-EPERM);
 
 	/* check sanity of attributes */
@@ -558,7 +557,7 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 	    attr->value_size > LPM_VAL_SIZE_MAX)
 		return ERR_PTR(-EINVAL);
 
-	trie = bpf_map_area_alloc(sizeof(*trie), NUMA_NO_NODE);
+	trie = kzalloc(sizeof(*trie), GFP_USER | __GFP_NOWARN);
 	if (!trie)
 		return ERR_PTR(-ENOMEM);
 
@@ -568,9 +567,20 @@ static struct bpf_map *trie_alloc(union bpf_attr *attr)
 			  offsetof(struct bpf_lpm_trie_key, data);
 	trie->max_prefixlen = trie->data_size * 8;
 
-	spin_lock_init(&trie->lock);
+	cost_per_node = sizeof(struct lpm_trie_node) +
+			attr->value_size + trie->data_size;
+	cost += (u64) attr->max_entries * cost_per_node;
+
+	ret = bpf_map_charge_init(&trie->map.memory, cost);
+	if (ret)
+		goto out_err;
+
+	raw_spin_lock_init(&trie->lock);
 
 	return &trie->map;
+out_err:
+	kfree(trie);
+	return ERR_PTR(ret);
 }
 
 static void trie_free(struct bpf_map *map)
@@ -578,6 +588,11 @@ static void trie_free(struct bpf_map *map)
 	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
 	struct lpm_trie_node __rcu **slot;
 	struct lpm_trie_node *node;
+
+	/* Wait for outstanding programs to complete
+	 * update/lookup/delete/get_next_key and free the trie.
+	 */
+	synchronize_rcu();
 
 	/* Always start at the root and walk down to a node that has no
 	 * children. Then free that node, nullify its reference in the parent
@@ -609,7 +624,7 @@ static void trie_free(struct bpf_map *map)
 	}
 
 out:
-	bpf_map_area_free(trie);
+	kfree(trie);
 }
 
 static int trie_get_next_key(struct bpf_map *map, void *_key, void *_next_key)
@@ -720,29 +735,12 @@ static int trie_check_btf(const struct bpf_map *map,
 	       -EINVAL : 0;
 }
 
-static u64 trie_mem_usage(const struct bpf_map *map)
-{
-	struct lpm_trie *trie = container_of(map, struct lpm_trie, map);
-	u64 elem_size;
-
-	elem_size = sizeof(struct lpm_trie_node) + trie->data_size +
-			    trie->map.value_size;
-	return elem_size * READ_ONCE(trie->n_entries);
-}
-
-BTF_ID_LIST_SINGLE(trie_map_btf_ids, struct, lpm_trie)
 const struct bpf_map_ops trie_map_ops = {
-	.map_meta_equal = bpf_map_meta_equal,
 	.map_alloc = trie_alloc,
 	.map_free = trie_free,
 	.map_get_next_key = trie_get_next_key,
 	.map_lookup_elem = trie_lookup_elem,
 	.map_update_elem = trie_update_elem,
 	.map_delete_elem = trie_delete_elem,
-	.map_lookup_batch = generic_map_lookup_batch,
-	.map_update_batch = generic_map_update_batch,
-	.map_delete_batch = generic_map_delete_batch,
 	.map_check_btf = trie_check_btf,
-	.map_mem_usage = trie_mem_usage,
-	.map_btf_id = &trie_map_btf_ids[0],
 };

@@ -17,7 +17,7 @@ gen_template_fallback()
 	local atomic="$1"; shift
 	local int="$1"; shift
 
-	local atomicname="arch_${atomic}_${pfx}${name}${sfx}${order}"
+	local atomicname="${atomic}_${pfx}${name}${sfx}${order}"
 
 	local ret="$(gen_ret_type "${meta}" "${int}")"
 	local retstmt="$(gen_ret_stmt "${meta}")"
@@ -56,20 +56,6 @@ cat << EOF
 EOF
 }
 
-gen_proto_order_variant()
-{
-	local meta="$1"; shift
-	local pfx="$1"; shift
-	local name="$1"; shift
-	local sfx="$1"; shift
-	local order="$1"; shift
-	local atomic="$1"
-
-	local basename="arch_${atomic}_${pfx}${name}${sfx}"
-
-	printf "#define ${basename}${order} ${basename}${order}\n"
-}
-
 #gen_proto_order_variants(meta, pfx, name, sfx, atomic, int, args...)
 gen_proto_order_variants()
 {
@@ -79,7 +65,7 @@ gen_proto_order_variants()
 	local sfx="$1"; shift
 	local atomic="$1"
 
-	local basename="arch_${atomic}_${pfx}${name}${sfx}"
+	local basename="${atomic}_${pfx}${name}${sfx}"
 
 	local template="$(find_fallback_template "${pfx}" "${name}" "${sfx}" "${order}")"
 
@@ -108,7 +94,7 @@ gen_proto_order_variants()
 	gen_basic_fallbacks "${basename}"
 
 	if [ ! -z "${template}" ]; then
-		printf "#endif /* ${basename} */\n\n"
+		printf "#endif /* ${atomic}_${pfx}${name}${sfx} */\n\n"
 		gen_proto_fallback "${meta}" "${pfx}" "${name}" "${sfx}" "" "$@"
 		gen_proto_fallback "${meta}" "${pfx}" "${name}" "${sfx}" "_acquire" "$@"
 		gen_proto_fallback "${meta}" "${pfx}" "${name}" "${sfx}" "_release" "$@"
@@ -124,11 +110,15 @@ gen_proto_order_variants()
 	printf "#endif /* ${basename}_relaxed */\n\n"
 }
 
-gen_order_fallbacks()
+gen_xchg_fallbacks()
 {
 	local xchg="$1"; shift
-
 cat <<EOF
+#ifndef ${xchg}_relaxed
+#define ${xchg}_relaxed		${xchg}
+#define ${xchg}_acquire		${xchg}
+#define ${xchg}_release		${xchg}
+#else /* ${xchg}_relaxed */
 
 #ifndef ${xchg}_acquire
 #define ${xchg}_acquire(...) \\
@@ -145,63 +135,9 @@ cat <<EOF
 	__atomic_op_fence(${xchg}, __VA_ARGS__)
 #endif
 
-EOF
-}
-
-gen_xchg_fallbacks()
-{
-	local xchg="$1"; shift
-	printf "#ifndef ${xchg}_relaxed\n"
-
-	gen_basic_fallbacks ${xchg}
-
-	printf "#else /* ${xchg}_relaxed */\n"
-
-	gen_order_fallbacks ${xchg}
-
-	printf "#endif /* ${xchg}_relaxed */\n\n"
-}
-
-gen_try_cmpxchg_fallback()
-{
-	local cmpxchg="$1"; shift;
-	local order="$1"; shift;
-
-cat <<EOF
-#ifndef arch_try_${cmpxchg}${order}
-#define arch_try_${cmpxchg}${order}(_ptr, _oldp, _new) \\
-({ \\
-	typeof(*(_ptr)) *___op = (_oldp), ___o = *___op, ___r; \\
-	___r = arch_${cmpxchg}${order}((_ptr), ___o, (_new)); \\
-	if (unlikely(___r != ___o)) \\
-		*___op = ___r; \\
-	likely(___r == ___o); \\
-})
-#endif /* arch_try_${cmpxchg}${order} */
+#endif /* ${xchg}_relaxed */
 
 EOF
-}
-
-gen_try_cmpxchg_fallbacks()
-{
-	local cmpxchg="$1"; shift;
-
-	printf "#ifndef arch_try_${cmpxchg}_relaxed\n"
-	printf "#ifdef arch_try_${cmpxchg}\n"
-
-	gen_basic_fallbacks "arch_try_${cmpxchg}"
-
-	printf "#endif /* arch_try_${cmpxchg} */\n\n"
-
-	for order in "" "_acquire" "_release" "_relaxed"; do
-		gen_try_cmpxchg_fallback "${cmpxchg}" "${order}"
-	done
-
-	printf "#else /* arch_try_${cmpxchg}_relaxed */\n"
-
-	gen_order_fallbacks "arch_try_${cmpxchg}"
-
-	printf "#endif /* arch_try_${cmpxchg}_relaxed */\n\n"
 }
 
 cat << EOF
@@ -213,20 +149,10 @@ cat << EOF
 #ifndef _LINUX_ATOMIC_FALLBACK_H
 #define _LINUX_ATOMIC_FALLBACK_H
 
-#include <linux/compiler.h>
-
 EOF
 
-for xchg in "arch_xchg" "arch_cmpxchg" "arch_cmpxchg64"; do
+for xchg in "xchg" "cmpxchg" "cmpxchg64"; do
 	gen_xchg_fallbacks "${xchg}"
-done
-
-for cmpxchg in "cmpxchg" "cmpxchg64"; do
-	gen_try_cmpxchg_fallbacks "${cmpxchg}"
-done
-
-for cmpxchg in "cmpxchg_local" "cmpxchg64_local"; do
-	gen_try_cmpxchg_fallback "${cmpxchg}" ""
 done
 
 grep '^[a-z]' "$1" | while read name meta args; do
@@ -234,6 +160,9 @@ grep '^[a-z]' "$1" | while read name meta args; do
 done
 
 cat <<EOF
+#define atomic_cond_read_acquire(v, c) smp_cond_load_acquire(&(v)->counter, (c))
+#define atomic_cond_read_relaxed(v, c) smp_cond_load_relaxed(&(v)->counter, (c))
+
 #ifdef CONFIG_GENERIC_ATOMIC64
 #include <asm-generic/atomic64.h>
 #endif
@@ -245,5 +174,8 @@ grep '^[a-z]' "$1" | while read name meta args; do
 done
 
 cat <<EOF
+#define atomic64_cond_read_acquire(v, c) smp_cond_load_acquire(&(v)->counter, (c))
+#define atomic64_cond_read_relaxed(v, c) smp_cond_load_relaxed(&(v)->counter, (c))
+
 #endif /* _LINUX_ATOMIC_FALLBACK_H */
 EOF

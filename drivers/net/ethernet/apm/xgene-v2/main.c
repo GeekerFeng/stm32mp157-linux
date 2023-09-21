@@ -36,7 +36,7 @@ static int xge_get_resources(struct xge_pdata *pdata)
 		return -ENOMEM;
 	}
 
-	if (device_get_ethdev_address(dev, ndev))
+	if (!device_get_mac_address(dev, ndev->dev_addr, ETH_ALEN))
 		eth_hw_addr_random(ndev);
 
 	memcpy(ndev->perm_addr, ndev->dev_addr, ndev->addr_len);
@@ -575,7 +575,7 @@ static void xge_free_pending_skb(struct net_device *ndev)
 	}
 }
 
-static void xge_timeout(struct net_device *ndev, unsigned int txqueue)
+static void xge_timeout(struct net_device *ndev)
 {
 	struct xge_pdata *pdata = netdev_priv(ndev);
 
@@ -672,18 +672,16 @@ static int xge_probe(struct platform_device *pdev)
 	if (ret)
 		goto err;
 
-	netif_napi_add(ndev, &pdata->napi, xge_napi);
+	netif_napi_add(ndev, &pdata->napi, xge_napi, NAPI_POLL_WEIGHT);
 
 	ret = register_netdev(ndev);
 	if (ret) {
 		netdev_err(ndev, "Failed to register netdev\n");
-		goto err_mdio_remove;
+		goto err;
 	}
 
 	return 0;
 
-err_mdio_remove:
-	xge_mdio_remove(ndev);
 err:
 	free_netdev(ndev);
 
@@ -743,4 +741,5 @@ module_platform_driver(xge_driver);
 
 MODULE_DESCRIPTION("APM X-Gene SoC Ethernet v2 driver");
 MODULE_AUTHOR("Iyappan Subramanian <isubramanian@apm.com>");
+MODULE_VERSION(XGENE_ENET_V2_VERSION);
 MODULE_LICENSE("GPL");

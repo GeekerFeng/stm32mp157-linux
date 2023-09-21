@@ -35,7 +35,7 @@
 struct if_spi_packet {
 	struct list_head		list;
 	u16				blen;
-	u8				buffer[] __aligned(4);
+	u8				buffer[0] __attribute__((aligned(4)));
 };
 
 struct if_spi_card {
@@ -235,9 +235,8 @@ static int spu_read(struct if_spi_card *card, u16 reg, u8 *buf, int len)
 		spi_message_add_tail(&dummy_trans, &m);
 	} else {
 		/* Busy-wait while the SPU fills the FIFO */
-		reg_trans.delay.value =
+		reg_trans.delay_usecs =
 			DIV_ROUND_UP((100 + (delay * 10)), 1000);
-		reg_trans.delay.unit = SPI_DELAY_UNIT_USECS;
 	}
 
 	/* read in data */
@@ -1051,7 +1050,7 @@ static int if_spi_init_card(struct if_spi_card *card)
 				"spi->max_speed_hz=%d\n",
 				card->card_id, card->card_rev,
 				card->spi->master->bus_num,
-				spi_get_chipselect(card->spi, 0),
+				card->spi->chip_select,
 				card->spi->max_speed_hz);
 		err = if_spi_prog_helper_firmware(card, helper);
 		if (err)
@@ -1195,7 +1194,7 @@ out:
 	return err;
 }
 
-static void libertas_spi_remove(struct spi_device *spi)
+static int libertas_spi_remove(struct spi_device *spi)
 {
 	struct if_spi_card *card = spi_get_drvdata(spi);
 	struct lbs_private *priv = card->priv;
@@ -1212,6 +1211,8 @@ static void libertas_spi_remove(struct spi_device *spi)
 	if (card->pdata->teardown)
 		card->pdata->teardown(spi);
 	free_if_spi_card(card);
+
+	return 0;
 }
 
 static int if_spi_suspend(struct device *dev)

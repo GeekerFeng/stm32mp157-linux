@@ -163,17 +163,10 @@ static void spi_engine_gen_xfer(struct spi_engine_program *p, bool dry,
 }
 
 static void spi_engine_gen_sleep(struct spi_engine_program *p, bool dry,
-	struct spi_engine *spi_engine, unsigned int clk_div,
-	struct spi_transfer *xfer)
+	struct spi_engine *spi_engine, unsigned int clk_div, unsigned int delay)
 {
 	unsigned int spi_clk = clk_get_rate(spi_engine->ref_clk);
 	unsigned int t;
-	int delay;
-
-	delay = spi_delay_to_ns(&xfer->delay, xfer);
-	if (delay < 0)
-		return;
-	delay /= 1000;
 
 	if (delay == 0)
 		return;
@@ -193,7 +186,7 @@ static void spi_engine_gen_cs(struct spi_engine_program *p, bool dry,
 	unsigned int mask = 0xff;
 
 	if (assert)
-		mask ^= BIT(spi_get_chipselect(spi, 0));
+		mask ^= BIT(spi->chip_select);
 
 	spi_engine_program_add_cmd(p, dry, SPI_ENGINE_CMD_ASSERT(1, mask));
 }
@@ -225,7 +218,8 @@ static int spi_engine_compile_message(struct spi_engine *spi_engine,
 			spi_engine_gen_cs(p, dry, spi, true);
 
 		spi_engine_gen_xfer(p, dry, xfer);
-		spi_engine_gen_sleep(p, dry, spi_engine, clk_div, xfer);
+		spi_engine_gen_sleep(p, dry, spi_engine, clk_div,
+			xfer->delay_usecs);
 
 		cs_change = xfer->cs_change;
 		if (list_is_last(&xfer->transfer_list, &msg->transfers))
@@ -485,6 +479,22 @@ static int spi_engine_probe(struct platform_device *pdev)
 
 	spin_lock_init(&spi_engine->lock);
 
+	spi_engine->base = devm_platform_ioremap_resource(pdev, 0);
+	if (IS_ERR(spi_engine->base)) {
+		ret = PTR_ERR(spi_engine->base);
+		goto err_put_master;
+	}
+
+	version = readl(spi_engine->base + SPI_ENGINE_REG_VERSION);
+	if (SPI_ENGINE_VERSION_MAJOR(version) != 1) {
+		dev_err(&pdev->dev, "Unsupported peripheral version %u.%u.%c\n",
+			SPI_ENGINE_VERSION_MAJOR(version),
+			SPI_ENGINE_VERSION_MINOR(version),
+			SPI_ENGINE_VERSION_PATCH(version));
+		ret = -ENODEV;
+		goto err_put_master;
+	}
+
 	spi_engine->clk = devm_clk_get(&pdev->dev, "s_axi_aclk");
 	if (IS_ERR(spi_engine->clk)) {
 		ret = PTR_ERR(spi_engine->clk);
@@ -504,22 +514,6 @@ static int spi_engine_probe(struct platform_device *pdev)
 	ret = clk_prepare_enable(spi_engine->ref_clk);
 	if (ret)
 		goto err_clk_disable;
-
-	spi_engine->base = devm_platform_ioremap_resource(pdev, 0);
-	if (IS_ERR(spi_engine->base)) {
-		ret = PTR_ERR(spi_engine->base);
-		goto err_ref_clk_disable;
-	}
-
-	version = readl(spi_engine->base + SPI_ENGINE_REG_VERSION);
-	if (SPI_ENGINE_VERSION_MAJOR(version) != 1) {
-		dev_err(&pdev->dev, "Unsupported peripheral version %u.%u.%c\n",
-			SPI_ENGINE_VERSION_MAJOR(version),
-			SPI_ENGINE_VERSION_MINOR(version),
-			SPI_ENGINE_VERSION_PATCH(version));
-		ret = -ENODEV;
-		goto err_ref_clk_disable;
-	}
 
 	writel_relaxed(0x00, spi_engine->base + SPI_ENGINE_REG_RESET);
 	writel_relaxed(0xff, spi_engine->base + SPI_ENGINE_REG_INT_PENDING);
@@ -554,7 +548,7 @@ err_put_master:
 	return ret;
 }
 
-static void spi_engine_remove(struct platform_device *pdev)
+static int spi_engine_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = spi_master_get(platform_get_drvdata(pdev));
 	struct spi_engine *spi_engine = spi_master_get_devdata(master);
@@ -572,6 +566,8 @@ static void spi_engine_remove(struct platform_device *pdev)
 
 	clk_disable_unprepare(spi_engine->ref_clk);
 	clk_disable_unprepare(spi_engine->clk);
+
+	return 0;
 }
 
 static const struct of_device_id spi_engine_match_table[] = {
@@ -582,7 +578,7 @@ MODULE_DEVICE_TABLE(of, spi_engine_match_table);
 
 static struct platform_driver spi_engine_driver = {
 	.probe = spi_engine_probe,
-	.remove_new = spi_engine_remove,
+	.remove = spi_engine_remove,
 	.driver = {
 		.name = "spi-engine",
 		.of_match_table = spi_engine_match_table,

@@ -1,9 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0 */
-#ifndef _AMS_H
-#define _AMS_H
-
 #include <linux/i2c.h>
-#include <linux/input.h>
+#include <linux/input-polldev.h>
 #include <linux/kthread.h>
 #include <linux/mutex.h>
 #include <linux/spinlock.h>
@@ -54,7 +51,7 @@ struct ams {
 #endif
 
 	/* Joystick emulation */
-	struct input_dev *idev;
+	struct input_polled_dev *idev;
 	__u16 bustype;
 
 	/* calibrated null values */
@@ -72,5 +69,3 @@ extern int ams_i2c_init(struct device_node *np);
 
 extern int ams_input_init(void);
 extern void ams_input_exit(void);
-
-#endif /* _AMS_H */

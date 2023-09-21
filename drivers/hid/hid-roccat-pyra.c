@@ -449,9 +449,6 @@ static int pyra_probe(struct hid_device *hdev, const struct hid_device_id *id)
 {
 	int retval;
 
-	if (!hid_is_usb(hdev))
-		return -EINVAL;
-
 	retval = hid_parse(hdev);
 	if (retval) {
 		hid_err(hdev, "parse failed\n");
@@ -585,7 +582,7 @@ static int __init pyra_init(void)
 	int retval;
 
 	/* class name has to be same as driver name */
-	pyra_class = class_create("pyra");
+	pyra_class = class_create(THIS_MODULE, "pyra");
 	if (IS_ERR(pyra_class))
 		return PTR_ERR(pyra_class);
 	pyra_class->dev_groups = pyra_groups;

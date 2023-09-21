@@ -8,25 +8,15 @@
 #include <linux/interrupt.h>
 #include <linux/irqchip.h>
 #include <linux/irqdomain.h>
-#include <linux/module.h>
 #include <linux/seq_file.h>
-#include <asm/sbi.h>
+#include <asm/smp.h>
 
-static struct fwnode_handle *(*__get_intc_node)(void);
-
-void riscv_set_intc_hwnode_fn(struct fwnode_handle *(*fn)(void))
-{
-	__get_intc_node = fn;
-}
-
-struct fwnode_handle *riscv_get_intc_hwnode(void)
-{
-	if (__get_intc_node)
-		return __get_intc_node();
-
-	return NULL;
-}
-EXPORT_SYMBOL_GPL(riscv_get_intc_hwnode);
+/*
+ * Possible interrupt causes:
+ */
+#define INTERRUPT_CAUSE_SOFTWARE	IRQ_S_SOFT
+#define INTERRUPT_CAUSE_TIMER		IRQ_S_TIMER
+#define INTERRUPT_CAUSE_EXTERNAL	IRQ_S_EXT
 
 int arch_show_interrupts(struct seq_file *p, int prec)
 {
@@ -34,10 +24,37 @@ int arch_show_interrupts(struct seq_file *p, int prec)
 	return 0;
 }
 
+asmlinkage __visible void __irq_entry do_IRQ(struct pt_regs *regs)
+{
+	struct pt_regs *old_regs = set_irq_regs(regs);
+
+	irq_enter();
+	switch (regs->scause & ~SCAUSE_IRQ_FLAG) {
+	case INTERRUPT_CAUSE_TIMER:
+		riscv_timer_interrupt();
+		break;
+#ifdef CONFIG_SMP
+	case INTERRUPT_CAUSE_SOFTWARE:
+		/*
+		 * We only use software interrupts to pass IPIs, so if a non-SMP
+		 * system gets one, then we don't know what to do.
+		 */
+		riscv_software_interrupt();
+		break;
+#endif
+	case INTERRUPT_CAUSE_EXTERNAL:
+		handle_arch_irq(regs);
+		break;
+	default:
+		pr_alert("unexpected interrupt cause 0x%lx", regs->scause);
+		BUG();
+	}
+	irq_exit();
+
+	set_irq_regs(old_regs);
+}
+
 void __init init_IRQ(void)
 {
 	irqchip_init();
-	if (!handle_arch_irq)
-		panic("No interrupt controller found.");
-	sbi_ipi_init();
 }

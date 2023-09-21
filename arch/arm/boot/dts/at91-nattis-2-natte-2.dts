@@ -8,6 +8,7 @@
  */
 /dts-v1/;
 #include "at91-linea.dtsi"
+#include "sama5d3_lcd.dtsi"
 #include "at91-natte.dtsi"
 
 / {
@@ -18,7 +19,7 @@
 	gpio-keys {
 		compatible = "gpio-keys";
 
-		key-wakeup {
+		wakeup {
 			label = "Wakeup";
 			linux,code = <10>;
 			wakeup-source;

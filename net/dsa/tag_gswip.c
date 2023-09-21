@@ -10,9 +10,7 @@
 #include <linux/skbuff.h>
 #include <net/dsa.h>
 
-#include "tag.h"
-
-#define GSWIP_NAME			"gswip"
+#include "dsa_priv.h"
 
 #define GSWIP_TX_HEADER_LEN		4
 
@@ -62,7 +60,12 @@ static struct sk_buff *gswip_tag_xmit(struct sk_buff *skb,
 				      struct net_device *dev)
 {
 	struct dsa_port *dp = dsa_slave_to_port(dev);
+	int err;
 	u8 *gswip_tag;
+
+	err = skb_cow_head(skb, GSWIP_TX_HEADER_LEN);
+	if (err)
+		return NULL;
 
 	skb_push(skb, GSWIP_TX_HEADER_LEN);
 
@@ -77,7 +80,8 @@ static struct sk_buff *gswip_tag_xmit(struct sk_buff *skb,
 }
 
 static struct sk_buff *gswip_tag_rcv(struct sk_buff *skb,
-				     struct net_device *dev)
+				     struct net_device *dev,
+				     struct packet_type *pt)
 {
 	int port;
 	u8 *gswip_tag;
@@ -100,14 +104,14 @@ static struct sk_buff *gswip_tag_rcv(struct sk_buff *skb,
 }
 
 static const struct dsa_device_ops gswip_netdev_ops = {
-	.name = GSWIP_NAME,
+	.name = "gswip",
 	.proto	= DSA_TAG_PROTO_GSWIP,
 	.xmit = gswip_tag_xmit,
 	.rcv = gswip_tag_rcv,
-	.needed_headroom = GSWIP_RX_HEADER_LEN,
+	.overhead = GSWIP_RX_HEADER_LEN,
 };
 
 MODULE_LICENSE("GPL");
-MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_GSWIP, GSWIP_NAME);
+MODULE_ALIAS_DSA_TAG_DRIVER(DSA_TAG_PROTO_GSWIP);
 
 module_dsa_tag_driver(gswip_netdev_ops);

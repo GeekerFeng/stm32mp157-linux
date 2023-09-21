@@ -593,6 +593,7 @@ static irqreturn_t spi_qup_qup_irq(int irq, void *dev_id)
 {
 	struct spi_qup *controller = dev_id;
 	u32 opflags, qup_err, spi_err;
+	unsigned long flags;
 	int error = 0;
 
 	qup_err = readl_relaxed(controller->base + QUP_ERROR_FLAGS);
@@ -624,10 +625,10 @@ static irqreturn_t spi_qup_qup_irq(int irq, void *dev_id)
 		error = -EIO;
 	}
 
-	spin_lock(&controller->lock);
+	spin_lock_irqsave(&controller->lock, flags);
 	if (!controller->error)
 		controller->error = error;
-	spin_unlock(&controller->lock);
+	spin_unlock_irqrestore(&controller->lock, flags);
 
 	if (spi_qup_is_dma_xfer(controller->mode)) {
 		writel_relaxed(opflags, controller->base + QUP_OPERATIONAL);
@@ -847,7 +848,7 @@ static int spi_qup_transfer_one(struct spi_master *master,
 {
 	struct spi_qup *controller = spi_master_get_devdata(master);
 	unsigned long timeout, flags;
-	int ret;
+	int ret = -EIO;
 
 	ret = spi_qup_io_prep(spi, xfer);
 	if (ret)
@@ -931,11 +932,11 @@ static int spi_qup_init_dma(struct spi_master *master, resource_size_t base)
 	int ret;
 
 	/* allocate dma resources, if available */
-	master->dma_rx = dma_request_chan(dev, "rx");
+	master->dma_rx = dma_request_slave_channel_reason(dev, "rx");
 	if (IS_ERR(master->dma_rx))
 		return PTR_ERR(master->dma_rx);
 
-	master->dma_tx = dma_request_chan(dev, "tx");
+	master->dma_tx = dma_request_slave_channel_reason(dev, "tx");
 	if (IS_ERR(master->dma_tx)) {
 		ret = PTR_ERR(master->dma_tx);
 		goto err_tx;
@@ -1003,7 +1004,8 @@ static int spi_qup_probe(struct platform_device *pdev)
 	int ret, irq, size;
 
 	dev = &pdev->dev;
-	base = devm_platform_get_and_ioremap_resource(pdev, 0, &res);
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(dev, res);
 	if (IS_ERR(base))
 		return PTR_ERR(base);
 
@@ -1028,8 +1030,23 @@ static int spi_qup_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
+	ret = clk_prepare_enable(cclk);
+	if (ret) {
+		dev_err(dev, "cannot enable core clock\n");
+		return ret;
+	}
+
+	ret = clk_prepare_enable(iclk);
+	if (ret) {
+		clk_disable_unprepare(cclk);
+		dev_err(dev, "cannot enable iface clock\n");
+		return ret;
+	}
+
 	master = spi_alloc_master(dev, sizeof(struct spi_qup));
 	if (!master) {
+		clk_disable_unprepare(cclk);
+		clk_disable_unprepare(iclk);
 		dev_err(dev, "cannot allocate master\n");
 		return -ENOMEM;
 	}
@@ -1041,8 +1058,6 @@ static int spi_qup_probe(struct platform_device *pdev)
 	else
 		master->num_chipselect = num_cs;
 
-	master->use_gpio_descriptors = true;
-	master->max_native_cs = SPI_NUM_CHIPSELECTS;
 	master->bus_num = pdev->id;
 	master->mode_bits = SPI_CPOL | SPI_CPHA | SPI_CS_HIGH | SPI_LOOP;
 	master->bits_per_word_mask = SPI_BPW_RANGE_MASK(4, 32);
@@ -1077,19 +1092,6 @@ static int spi_qup_probe(struct platform_device *pdev)
 	spin_lock_init(&controller->lock);
 	init_completion(&controller->done);
 
-	ret = clk_prepare_enable(cclk);
-	if (ret) {
-		dev_err(dev, "cannot enable core clock\n");
-		goto error_dma;
-	}
-
-	ret = clk_prepare_enable(iclk);
-	if (ret) {
-		clk_disable_unprepare(cclk);
-		dev_err(dev, "cannot enable iface clock\n");
-		goto error_dma;
-	}
-
 	iomode = readl_relaxed(base + QUP_IO_M_MODES);
 
 	size = QUP_IO_M_OUTPUT_BLOCK_SIZE(iomode);
@@ -1119,7 +1121,7 @@ static int spi_qup_probe(struct platform_device *pdev)
 	ret = spi_qup_set_state(controller, QUP_STATE_RESET);
 	if (ret) {
 		dev_err(dev, "cannot set RESET state\n");
-		goto error_clk;
+		goto error_dma;
 	}
 
 	writel_relaxed(0, base + QUP_OPERATIONAL);
@@ -1143,7 +1145,7 @@ static int spi_qup_probe(struct platform_device *pdev)
 	ret = devm_request_irq(dev, irq, spi_qup_qup_irq,
 			       IRQF_TRIGGER_HIGH, pdev->name, controller);
 	if (ret)
-		goto error_clk;
+		goto error_dma;
 
 	pm_runtime_set_autosuspend_delay(dev, MSEC_PER_SEC);
 	pm_runtime_use_autosuspend(dev);
@@ -1158,12 +1160,11 @@ static int spi_qup_probe(struct platform_device *pdev)
 
 disable_pm:
 	pm_runtime_disable(&pdev->dev);
-error_clk:
-	clk_disable_unprepare(cclk);
-	clk_disable_unprepare(iclk);
 error_dma:
 	spi_qup_release_dma(master);
 error:
+	clk_disable_unprepare(cclk);
+	clk_disable_unprepare(iclk);
 	spi_master_put(master);
 	return ret;
 }
@@ -1198,10 +1199,8 @@ static int spi_qup_pm_resume_runtime(struct device *device)
 		return ret;
 
 	ret = clk_prepare_enable(controller->cclk);
-	if (ret) {
-		clk_disable_unprepare(controller->iclk);
+	if (ret)
 		return ret;
-	}
 
 	/* Disable clocks auto gaiting */
 	config = readl_relaxed(controller->base + QUP_CONFIG);
@@ -1247,53 +1246,40 @@ static int spi_qup_resume(struct device *device)
 		return ret;
 
 	ret = clk_prepare_enable(controller->cclk);
-	if (ret) {
-		clk_disable_unprepare(controller->iclk);
+	if (ret)
 		return ret;
-	}
 
 	ret = spi_qup_set_state(controller, QUP_STATE_RESET);
 	if (ret)
-		goto disable_clk;
+		return ret;
 
-	ret = spi_master_resume(master);
-	if (ret)
-		goto disable_clk;
-
-	return 0;
-
-disable_clk:
-	clk_disable_unprepare(controller->cclk);
-	clk_disable_unprepare(controller->iclk);
-	return ret;
+	return spi_master_resume(master);
 }
 #endif /* CONFIG_PM_SLEEP */
 
-static void spi_qup_remove(struct platform_device *pdev)
+static int spi_qup_remove(struct platform_device *pdev)
 {
 	struct spi_master *master = dev_get_drvdata(&pdev->dev);
 	struct spi_qup *controller = spi_master_get_devdata(master);
 	int ret;
 
 	ret = pm_runtime_get_sync(&pdev->dev);
+	if (ret < 0)
+		return ret;
 
-	if (ret >= 0) {
-		ret = spi_qup_set_state(controller, QUP_STATE_RESET);
-		if (ret)
-			dev_warn(&pdev->dev, "failed to reset controller (%pe)\n",
-				 ERR_PTR(ret));
-
-		clk_disable_unprepare(controller->cclk);
-		clk_disable_unprepare(controller->iclk);
-	} else {
-		dev_warn(&pdev->dev, "failed to resume, skip hw disable (%pe)\n",
-			 ERR_PTR(ret));
-	}
+	ret = spi_qup_set_state(controller, QUP_STATE_RESET);
+	if (ret)
+		return ret;
 
 	spi_qup_release_dma(master);
 
+	clk_disable_unprepare(controller->cclk);
+	clk_disable_unprepare(controller->iclk);
+
 	pm_runtime_put_noidle(&pdev->dev);
 	pm_runtime_disable(&pdev->dev);
+
+	return 0;
 }
 
 static const struct of_device_id spi_qup_dt_match[] = {
@@ -1318,7 +1304,7 @@ static struct platform_driver spi_qup_driver = {
 		.of_match_table = spi_qup_dt_match,
 	},
 	.probe = spi_qup_probe,
-	.remove_new = spi_qup_remove,
+	.remove = spi_qup_remove,
 };
 module_platform_driver(spi_qup_driver);
 

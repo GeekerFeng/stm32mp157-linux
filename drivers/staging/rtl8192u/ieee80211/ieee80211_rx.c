@@ -232,7 +232,8 @@ ieee80211_rx_frame_mgmt(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 	#ifdef NOT_YET
 	if (ieee->iw_mode == IW_MODE_MASTER) {
-		netdev_dbg(ieee->dev, "Master mode not yet supported.\n");
+		printk(KERN_DEBUG "%s: Master mode not yet supported.\n",
+		       ieee->dev->name);
 		return 0;
 /*
   hostap_update_sta_ps(ieee, (struct hostap_ieee80211_hdr_4addr *)
@@ -260,9 +261,9 @@ ieee80211_rx_frame_mgmt(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 	    if (ieee->iw_mode == IW_MODE_MASTER) {
 		if (type != WLAN_FC_TYPE_MGMT && type != WLAN_FC_TYPE_CTRL) {
-			netdev_dbg(skb->dev, "unknown management frame "
+			printk(KERN_DEBUG "%s: unknown management frame "
 			       "(type=0x%02x, stype=0x%02x) dropped\n",
-			       type, stype);
+			       skb->dev->name, type, stype);
 			return -1;
 		}
 
@@ -270,8 +271,8 @@ ieee80211_rx_frame_mgmt(struct ieee80211_device *ieee, struct sk_buff *skb,
 		return 0;
 	}
 
-	netdev_dbg(skb->dev, "hostap_rx_frame_mgmt: management frame "
-	       "received in non-Host AP mode\n");
+	printk(KERN_DEBUG "%s: hostap_rx_frame_mgmt: management frame "
+	       "received in non-Host AP mode\n", skb->dev->name);
 	return -1;
 	#endif
 }
@@ -348,9 +349,9 @@ ieee80211_rx_frame_decrypt(struct ieee80211_device *ieee, struct sk_buff *skb,
 	if (ieee->tkip_countermeasures &&
 	    strcmp(crypt->ops->name, "TKIP") == 0) {
 		if (net_ratelimit()) {
-			netdev_dbg(ieee->dev, "TKIP countermeasures: dropped "
+			printk(KERN_DEBUG "%s: TKIP countermeasures: dropped "
 			       "received packet from %pM\n",
-			       hdr->addr2);
+			       ieee->dev->name, hdr->addr2);
 		}
 		return -1;
 	}
@@ -396,9 +397,9 @@ ieee80211_rx_frame_decrypt_msdu(struct ieee80211_device *ieee, struct sk_buff *s
 	res = crypt->ops->decrypt_msdu(skb, keyidx, hdrlen, crypt->priv);
 	atomic_dec(&crypt->refcnt);
 	if (res < 0) {
-		netdev_dbg(ieee->dev, "MSDU decryption/MIC verification failed"
+		printk(KERN_DEBUG "%s: MSDU decryption/MIC verification failed"
 		       " (SA=%pM keyidx=%d)\n",
-		       hdr->addr2, keyidx);
+		       ieee->dev->name, hdr->addr2, keyidx);
 		return -1;
 	}
 
@@ -520,67 +521,54 @@ static bool AddReorderEntry(struct rx_ts_record *pTS, struct rx_reorder_entry *p
 	return true;
 }
 
-static void indicate_packets(struct ieee80211_device *ieee,
-			     struct ieee80211_rxb *rxb)
+void ieee80211_indicate_packets(struct ieee80211_device *ieee, struct ieee80211_rxb **prxbIndicateArray, u8  index)
 {
-	struct net_device_stats *stats = &ieee->stats;
-	struct net_device *dev = ieee->dev;
+	u8 i = 0, j = 0;
 	u16 ethertype;
-	u8 i;
-
-	for (i = 0; i < rxb->nr_subframes; i++) {
-		struct sk_buff *sub_skb = rxb->subframes[i];
-
-		if (!sub_skb)
-			continue;
+//	if(index > 1)
+//		IEEE80211_DEBUG(IEEE80211_DL_REORDER,"%s(): hahahahhhh, We indicate packet from reorder list, index is %u\n",__func__,index);
+	for (j = 0; j < index; j++) {
+//added by amy for reorder
+		struct ieee80211_rxb *prxb = prxbIndicateArray[j];
+		for (i = 0; i < prxb->nr_subframes; i++) {
+			struct sk_buff *sub_skb = prxb->subframes[i];
 
 		/* convert hdr + possible LLC headers into Ethernet header */
-		ethertype = (sub_skb->data[6] << 8) | sub_skb->data[7];
-		if (sub_skb->len >= 8 &&
-		    ((!memcmp(sub_skb->data, rfc1042_header, SNAP_SIZE) &&
-			ethertype != ETH_P_AARP &&
-			ethertype != ETH_P_IPX) ||
-		     !memcmp(sub_skb->data, bridge_tunnel_header, SNAP_SIZE))) {
+			ethertype = (sub_skb->data[6] << 8) | sub_skb->data[7];
+			if (sub_skb->len >= 8 &&
+				((memcmp(sub_skb->data, rfc1042_header, SNAP_SIZE) == 0 &&
+				  ethertype != ETH_P_AARP && ethertype != ETH_P_IPX) ||
+				 memcmp(sub_skb->data, bridge_tunnel_header, SNAP_SIZE) == 0)) {
 			/* remove RFC1042 or Bridge-Tunnel encapsulation and
 			 * replace EtherType */
-			skb_pull(sub_skb, SNAP_SIZE);
-		} else {
+				skb_pull(sub_skb, SNAP_SIZE);
+				memcpy(skb_push(sub_skb, ETH_ALEN), prxb->src, ETH_ALEN);
+				memcpy(skb_push(sub_skb, ETH_ALEN), prxb->dst, ETH_ALEN);
+			} else {
 			/* Leave Ethernet header part of hdr and full payload */
-			put_unaligned_be16(sub_skb->len, skb_push(sub_skb, 2));
-		}
-		memcpy(skb_push(sub_skb, ETH_ALEN), rxb->src, ETH_ALEN);
-		memcpy(skb_push(sub_skb, ETH_ALEN), rxb->dst, ETH_ALEN);
-
-		stats->rx_packets++;
-		stats->rx_bytes += sub_skb->len;
-		if (is_multicast_ether_addr(rxb->dst))
-			stats->multicast++;
+				put_unaligned_be16(sub_skb->len, skb_push(sub_skb, 2));
+				memcpy(skb_push(sub_skb, ETH_ALEN), prxb->src, ETH_ALEN);
+				memcpy(skb_push(sub_skb, ETH_ALEN), prxb->dst, ETH_ALEN);
+			}
+			//stats->rx_packets++;
+			//stats->rx_bytes += sub_skb->len;
 
 		/* Indicate the packets to upper layer */
-		sub_skb->protocol = eth_type_trans(sub_skb, dev);
-		memset(sub_skb->cb, 0, sizeof(sub_skb->cb));
-		sub_skb->dev = dev;
-		/* 802.11 crc not sufficient */
-		sub_skb->ip_summed = CHECKSUM_NONE;
-		ieee->last_rx_ps_time = jiffies;
-		netif_rx(sub_skb);
-	}
-}
-
-void ieee80211_indicate_packets(struct ieee80211_device *ieee,
-				struct ieee80211_rxb **prxbIndicateArray,
-				u8 index)
-{
-	u8 i;
-
-	for (i = 0; i < index; i++) {
-		struct ieee80211_rxb *prxb = prxbIndicateArray[i];
-
-		indicate_packets(ieee, prxb);
+			if (sub_skb) {
+				sub_skb->protocol = eth_type_trans(sub_skb, ieee->dev);
+				memset(sub_skb->cb, 0, sizeof(sub_skb->cb));
+				sub_skb->dev = ieee->dev;
+				sub_skb->ip_summed = CHECKSUM_NONE; /* 802.11 crc not sufficient */
+				//skb->ip_summed = CHECKSUM_UNNECESSARY; /* 802.11 crc not sufficient */
+				ieee->last_rx_ps_time = jiffies;
+				netif_rx(sub_skb);
+			}
+		}
 		kfree(prxb);
 		prxb = NULL;
 	}
 }
+
 
 static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 				    struct ieee80211_rxb *prxb,
@@ -597,7 +585,7 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 
 	prxbIndicateArray = kmalloc_array(REORDER_WIN_SIZE,
 					  sizeof(struct ieee80211_rxb *),
-					  GFP_ATOMIC);
+					  GFP_KERNEL);
 	if (!prxbIndicateArray)
 		return;
 
@@ -612,9 +600,9 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 		pHTInfo->RxReorderDropCounter++;
 		{
 			int i;
-			for (i = 0; i < prxb->nr_subframes; i++)
+			for (i = 0; i < prxb->nr_subframes; i++) {
 				dev_kfree_skb(prxb->subframes[i]);
-
+			}
 			kfree(prxb);
 			prxb = NULL;
 		}
@@ -632,11 +620,11 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 		pTS->rx_indicate_seq = (pTS->rx_indicate_seq + 1) % 4096;
 		bMatchWinStart = true;
 	} else if (SN_LESS(WinEnd, SeqNum)) {
-		if (SeqNum >= (WinSize - 1))
+		if (SeqNum >= (WinSize - 1)) {
 			pTS->rx_indicate_seq = SeqNum + 1 - WinSize;
-		else
+		} else {
 			pTS->rx_indicate_seq = 4095 - (WinSize - (SeqNum + 1)) + 1;
-
+		}
 		IEEE80211_DEBUG(IEEE80211_DL_REORDER, "Window Shift! IndicateSeq: %d, NewSeq: %d\n", pTS->rx_indicate_seq, SeqNum);
 	}
 
@@ -674,9 +662,9 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 				list_add_tail(&pReorderEntry->List, &ieee->RxReorder_Unused_List);
 				{
 					int i;
-					for (i = 0; i < prxb->nr_subframes; i++)
+					for (i = 0; i < prxb->nr_subframes; i++) {
 						dev_kfree_skb(prxb->subframes[i]);
-
+					}
 					kfree(prxb);
 					prxb = NULL;
 				}
@@ -693,9 +681,9 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 			IEEE80211_DEBUG(IEEE80211_DL_ERR, "RxReorderIndicatePacket(): There is no reorder entry!! Packet is dropped!!\n");
 			{
 				int i;
-				for (i = 0; i < prxb->nr_subframes; i++)
+				for (i = 0; i < prxb->nr_subframes; i++) {
 					dev_kfree_skb(prxb->subframes[i]);
-
+				}
 				kfree(prxb);
 				prxb = NULL;
 			}
@@ -761,8 +749,7 @@ static void RxReorderIndicatePacket(struct ieee80211_device *ieee,
 	kfree(prxbIndicateArray);
 }
 
-static u8 parse_subframe(struct ieee80211_device *ieee,
-			 struct sk_buff *skb,
+static u8 parse_subframe(struct sk_buff *skb,
 			 struct ieee80211_rx_stats *rx_stats,
 			 struct ieee80211_rxb *rxb, u8 *src, u8 *dst)
 {
@@ -785,12 +772,13 @@ static u8 parse_subframe(struct ieee80211_device *ieee,
 		bIsAggregateFrame = true;
 	}
 
-	if (IEEE80211_QOS_HAS_SEQ(fc))
+	if (IEEE80211_QOS_HAS_SEQ(fc)) {
 		LLCOffset += 2;
+	}
 
-	if (rx_stats->bContainHTC)
+	if (rx_stats->bContainHTC) {
 		LLCOffset += HTCLNG;
-
+	}
 	// Null packet, don't indicate it to upper layer
 	ChkLength = LLCOffset;/* + (Frame_WEP(frame)!=0 ?Adapter->MgntInfo.SecurityInfo.EncryptionHeadOverhead:0);*/
 
@@ -822,11 +810,11 @@ static u8 parse_subframe(struct ieee80211_device *ieee,
 			nSubframe_Length = (nSubframe_Length >> 8) + (nSubframe_Length << 8);
 
 			if (skb->len < (ETHERNET_HEADER_SIZE + nSubframe_Length)) {
-				netdev_dbg(ieee->dev, "A-MSDU parse error!! pRfd->nTotalSubframe : %d\n",
-					   rxb->nr_subframes);
-				netdev_dbg(ieee->dev, "A-MSDU parse error!! Subframe Length: %d\n", nSubframe_Length);
-				netdev_dbg(ieee->dev, "nRemain_Length is %d and nSubframe_Length is : %d\n", skb->len, nSubframe_Length);
-				netdev_dbg(ieee->dev, "The Packet SeqNum is %d\n", SeqNum);
+				printk("%s: A-MSDU parse error!! pRfd->nTotalSubframe : %d\n",\
+						__func__, rxb->nr_subframes);
+				printk("%s: A-MSDU parse error!! Subframe Length: %d\n", __func__, nSubframe_Length);
+				printk("nRemain_Length is %d and nSubframe_Length is : %d\n", skb->len, nSubframe_Length);
+				printk("The Packet SeqNum is %d\n", SeqNum);
 				return 0;
 			}
 
@@ -854,11 +842,13 @@ static u8 parse_subframe(struct ieee80211_device *ieee,
 
 			if (skb->len != 0) {
 				nPadding_Length = 4 - ((nSubframe_Length + ETHERNET_HEADER_SIZE) % 4);
-				if (nPadding_Length == 4)
+				if (nPadding_Length == 4) {
 					nPadding_Length = 0;
+				}
 
-				if (skb->len < nPadding_Length)
+				if (skb->len < nPadding_Length) {
 					return 0;
+				}
 
 				skb_pull(skb, nPadding_Length);
 			}
@@ -887,6 +877,7 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 	u16 fc, type, stype, sc;
 	struct net_device_stats *stats;
 	unsigned int frag;
+	u16 ethertype;
 	//added by amy for reorder
 	u8	TID = 0;
 	u16	SeqNum = 0;
@@ -913,7 +904,8 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 	stats = &ieee->stats;
 
 	if (skb->len < 10) {
-		netdev_info(dev, "SKB length < 10\n");
+		printk(KERN_INFO "%s: SKB length < 10\n",
+		       dev->name);
 		goto rx_dropped;
 	}
 
@@ -927,7 +919,7 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 	if (HTCCheck(ieee, skb->data)) {
 		if (net_ratelimit())
-			netdev_warn(dev, "find HTCControl\n");
+			printk("find HTCControl\n");
 		hdrlen += 4;
 		rx_stats->bContainHTC = true;
 	}
@@ -951,11 +943,9 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 #endif
 
 	if (ieee->iw_mode == IW_MODE_MONITOR) {
-		unsigned int len = skb->len;
-
 		ieee80211_monitor_rx(ieee, skb, rx_stats);
 		stats->rx_packets++;
-		stats->rx_bytes += len;
+		stats->rx_bytes += skb->len;
 		return 1;
 	}
 
@@ -1123,7 +1113,7 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 	if (ieee->host_decrypt && (fc & IEEE80211_FCTL_WEP) &&
 	    (keyidx = ieee80211_rx_frame_decrypt(ieee, skb, crypt)) < 0) {
-		netdev_dbg(ieee->dev, "decrypt frame error\n");
+		printk("decrypt frame error\n");
 		goto rx_dropped;
 	}
 
@@ -1151,8 +1141,9 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 			flen -= hdrlen;
 
 		if (frag_skb->tail + flen > frag_skb->end) {
-			netdev_warn(dev, "host decrypted and "
-			       "reassembled frame did not fit skb\n");
+			printk(KERN_WARNING "%s: host decrypted and "
+			       "reassembled frame did not fit skb\n",
+			       dev->name);
 			ieee80211_frag_cache_invalidate(ieee, hdr);
 			goto rx_dropped;
 		}
@@ -1187,7 +1178,7 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 	 * encrypted/authenticated */
 	if (ieee->host_decrypt && (fc & IEEE80211_FCTL_WEP) &&
 	    ieee80211_rx_frame_decrypt_msdu(ieee, skb, keyidx, crypt)) {
-		netdev_dbg(ieee->dev, "==>decrypt msdu error\n");
+		printk("==>decrypt msdu error\n");
 		goto rx_dropped;
 	}
 
@@ -1247,8 +1238,9 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 		TID = Frame_QoSTID(skb->data);
 		SeqNum = WLAN_GET_SEQ_SEQ(sc);
 		GetTs(ieee, (struct ts_common_info **)&pTS, hdr->addr2, TID, RX_DIR, true);
-		if (TID != 0 && TID != 3)
+		if (TID != 0 && TID != 3) {
 			ieee->bis_any_nonbepkts = true;
+		}
 	}
 //added by amy for reorder
 	/* skb: hdr + (possible reassembled) full plaintext payload */
@@ -1258,11 +1250,11 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 		goto rx_dropped;
 	/* to parse amsdu packets */
 	/* qos data packets & reserved bit is 1 */
-	if (parse_subframe(ieee, skb, rx_stats, rxb, src, dst) == 0) {
+	if (parse_subframe(skb, rx_stats, rxb, src, dst) == 0) {
 		/* only to free rxb, and not submit the packets to upper layer */
-		for (i = 0; i < rxb->nr_subframes; i++)
+		for (i = 0; i < rxb->nr_subframes; i++) {
 			dev_kfree_skb(rxb->subframes[i]);
-
+		}
 		kfree(rxb);
 		rxb = NULL;
 		goto rx_dropped;
@@ -1270,7 +1262,47 @@ int ieee80211_rx(struct ieee80211_device *ieee, struct sk_buff *skb,
 
 //added by amy for reorder
 	if (!ieee->pHTInfo->bCurRxReorderEnable || !pTS) {
-		indicate_packets(ieee, rxb);
+//added by amy for reorder
+		for (i = 0; i < rxb->nr_subframes; i++) {
+			struct sk_buff *sub_skb = rxb->subframes[i];
+
+			if (sub_skb) {
+				/* convert hdr + possible LLC headers into Ethernet header */
+				ethertype = (sub_skb->data[6] << 8) | sub_skb->data[7];
+				if (sub_skb->len >= 8 &&
+						((memcmp(sub_skb->data, rfc1042_header, SNAP_SIZE) == 0 &&
+						  ethertype != ETH_P_AARP && ethertype != ETH_P_IPX) ||
+						 memcmp(sub_skb->data, bridge_tunnel_header, SNAP_SIZE) == 0)) {
+					/* remove RFC1042 or Bridge-Tunnel encapsulation and
+					 * replace EtherType */
+					skb_pull(sub_skb, SNAP_SIZE);
+					memcpy(skb_push(sub_skb, ETH_ALEN), src, ETH_ALEN);
+					memcpy(skb_push(sub_skb, ETH_ALEN), dst, ETH_ALEN);
+				} else {
+					u16 len;
+					/* Leave Ethernet header part of hdr and full payload */
+					len = be16_to_cpu(htons(sub_skb->len));
+					memcpy(skb_push(sub_skb, 2), &len, 2);
+					memcpy(skb_push(sub_skb, ETH_ALEN), src, ETH_ALEN);
+					memcpy(skb_push(sub_skb, ETH_ALEN), dst, ETH_ALEN);
+				}
+
+				stats->rx_packets++;
+				stats->rx_bytes += sub_skb->len;
+				if (is_multicast_ether_addr(dst)) {
+					stats->multicast++;
+				}
+
+				/* Indicate the packets to upper layer */
+				sub_skb->protocol = eth_type_trans(sub_skb, dev);
+				memset(sub_skb->cb, 0, sizeof(sub_skb->cb));
+				sub_skb->dev = dev;
+				sub_skb->ip_summed = CHECKSUM_NONE; /* 802.11 crc not sufficient */
+				//skb->ip_summed = CHECKSUM_UNNECESSARY; /* 802.11 crc not sufficient */
+				ieee->last_rx_ps_time = jiffies;
+				netif_rx(sub_skb);
+			}
+		}
 		kfree(rxb);
 		rxb = NULL;
 
@@ -1312,8 +1344,7 @@ static u8 qos_oui[QOS_OUI_LEN] = { 0x00, 0x50, 0xF2 };
 static int ieee80211_verify_qos_info(struct ieee80211_qos_information_element
 				     *info_element, int sub_type)
 {
-	if (info_element->elementID != QOS_ELEMENT_ID)
-		return -1;
+
 	if (info_element->qui_subtype != sub_type)
 		return -1;
 	if (memcmp(info_element->qui, qos_oui, QOS_OUI_LEN))
@@ -1330,18 +1361,27 @@ static int ieee80211_verify_qos_info(struct ieee80211_qos_information_element
 /*
  * Parse a QoS parameter element
  */
-static int ieee80211_read_qos_param_element(
-		struct ieee80211_qos_parameter_info *element_param,
-		struct ieee80211_info_element *info_element)
+static int ieee80211_read_qos_param_element(struct ieee80211_qos_parameter_info
+					    *element_param, struct ieee80211_info_element
+					    *info_element)
 {
-	size_t size = sizeof(*element_param);
+	int ret = 0;
+	u16 size = sizeof(struct ieee80211_qos_parameter_info) - 2;
 
-	if (!element_param || !info_element || info_element->len != size - 2)
+	if (!info_element || !element_param)
 		return -1;
 
-	memcpy(element_param, info_element, size);
-	return ieee80211_verify_qos_info(&element_param->info_element,
-					 QOS_OUI_PARAM_SUB_TYPE);
+	if (info_element->id == QOS_ELEMENT_ID && info_element->len == size) {
+		memcpy(element_param->info_element.qui, info_element->data,
+		       info_element->len);
+		element_param->info_element.elementID = info_element->id;
+		element_param->info_element.length = info_element->len;
+	} else
+		ret = -1;
+	if (ret == 0)
+		ret = ieee80211_verify_qos_info(&element_param->info_element,
+						QOS_OUI_PARAM_SUB_TYPE);
+	return ret;
 }
 
 /*
@@ -1351,13 +1391,26 @@ static int ieee80211_read_qos_info_element(
 		struct ieee80211_qos_information_element *element_info,
 		struct ieee80211_info_element *info_element)
 {
-	size_t size = sizeof(*element_info);
+	int ret = 0;
+	u16 size = sizeof(struct ieee80211_qos_information_element) - 2;
 
-	if (!element_info || !info_element || info_element->len != size - 2)
+	if (!element_info)
+		return -1;
+	if (!info_element)
 		return -1;
 
-	memcpy(element_info, info_element, size);
-	return ieee80211_verify_qos_info(element_info, QOS_OUI_INFO_SUB_TYPE);
+	if ((info_element->id == QOS_ELEMENT_ID) && (info_element->len == size)) {
+		memcpy(element_info->qui, info_element->data,
+		       info_element->len);
+		element_info->elementID = info_element->id;
+		element_info->length = info_element->len;
+	} else
+		ret = -1;
+
+	if (ret == 0)
+		ret = ieee80211_verify_qos_info(element_info,
+						QOS_OUI_INFO_SUB_TYPE);
+	return ret;
 }
 
 
@@ -1500,9 +1553,11 @@ static inline void ieee80211_extract_country_ie(
 		// some AP (e.g. Cisco 1242) don't include country IE in their
 		// probe response frame.
 		//
-		if (IS_EQUAL_CIE_SRC(ieee, addr2))
+		if (IS_EQUAL_CIE_SRC(ieee, addr2)) {
 			UPDATE_CIE_WATCHDOG(ieee);
+		}
 	}
+
 }
 
 int ieee80211_parse_info_param(struct ieee80211_device *ieee,
@@ -1565,7 +1620,7 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 			for (i = 0; i < network->rates_len; i++) {
 				network->rates[i] = info_element->data[i];
 #ifdef CONFIG_IEEE80211_DEBUG
-				p += scnprintf(p, sizeof(rates_str) -
+				p += snprintf(p, sizeof(rates_str) -
 					      (p - rates_str), "%02X ",
 					      network->rates[i]);
 #endif
@@ -1592,7 +1647,7 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 			for (i = 0; i < network->rates_ex_len; i++) {
 				network->rates_ex[i] = info_element->data[i];
 #ifdef CONFIG_IEEE80211_DEBUG
-				p += scnprintf(p, sizeof(rates_str) -
+				p += snprintf(p, sizeof(rates_str) -
 					      (p - rates_str), "%02X ",
 					      network->rates_ex[i]);
 #endif
@@ -1808,7 +1863,7 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 				info_element->data[0] == 0x00 &&
 				info_element->data[1] == 0x13 &&
 				info_element->data[2] == 0x74)) {
-				netdev_dbg(ieee->dev, "========> Atheros AP exists\n");
+				printk("========>%s(): athros AP is exist\n", __func__);
 				network->atheros_cap_exist = true;
 			} else
 				network->atheros_cap_exist = false;
@@ -1925,8 +1980,8 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 			}
 			break;
 		case MFIE_TYPE_QOS_PARAMETER:
-			netdev_err(ieee->dev,
-				   "QoS Error need to parse QOS_PARAMETER IE\n");
+			printk(KERN_ERR
+			       "QoS Error need to parse QOS_PARAMETER IE\n");
 			break;
 
 		case MFIE_TYPE_COUNTRY:
@@ -1956,6 +2011,43 @@ int ieee80211_parse_info_param(struct ieee80211_device *ieee,
 		network->unknown_cap_exist = false;
 	}
 	return 0;
+}
+
+static inline u8 ieee80211_SignalStrengthTranslate(
+	u8  CurrSS
+	)
+{
+	u8 RetSS;
+
+	// Step 1. Scale mapping.
+	if (CurrSS >= 71 && CurrSS <= 100) {
+		RetSS = 90 + ((CurrSS - 70) / 3);
+	} else if (CurrSS >= 41 && CurrSS <= 70) {
+		RetSS = 78 + ((CurrSS - 40) / 3);
+	} else if (CurrSS >= 31 && CurrSS <= 40) {
+		RetSS = 66 + (CurrSS - 30);
+	} else if (CurrSS >= 21 && CurrSS <= 30) {
+		RetSS = 54 + (CurrSS - 20);
+	} else if (CurrSS >= 5 && CurrSS <= 20) {
+		RetSS = 42 + (((CurrSS - 5) * 2) / 3);
+	} else if (CurrSS == 4) {
+		RetSS = 36;
+	} else if (CurrSS == 3) {
+		RetSS = 27;
+	} else if (CurrSS == 2) {
+		RetSS = 18;
+	} else if (CurrSS == 1) {
+		RetSS = 9;
+	} else {
+		RetSS = CurrSS;
+	}
+	//RT_TRACE(COMP_DBG, DBG_LOUD, ("##### After Mapping:  LastSS: %d, CurrSS: %d, RetSS: %d\n", LastSS, CurrSS, RetSS));
+
+	// Step 2. Smoothing.
+
+	//RT_TRACE(COMP_DBG, DBG_LOUD, ("$$$$$ After Smoothing:  LastSS: %d, CurrSS: %d, RetSS: %d\n", LastSS, CurrSS, RetSS));
+
+	return RetSS;
 }
 
 /* 0-100 index */
@@ -2058,6 +2150,7 @@ static inline int ieee80211_network_init(
 		network->flags |= NETWORK_EMPTY_ESSID;
 
 	stats->signal = 30 + (stats->SignalStrength * 70) / 100;
+	//stats->signal = ieee80211_SignalStrengthTranslate(stats->signal);
 	stats->noise = ieee80211_translate_todbm((u8)(100 - stats->signal)) - 25;
 
 	memcpy(&network->stats, stats, sizeof(network->stats));
@@ -2264,14 +2357,14 @@ static inline void ieee80211_process_probe_response(
 			if (IS_COUNTRY_IE_VALID(ieee)) {
 				// Case 1: Country code
 				if (!is_legal_channel(ieee, network->channel)) {
-					netdev_warn(ieee->dev, "GetScanInfo(): For Country code, filter probe response at channel(%d).\n", network->channel);
+					printk("GetScanInfo(): For Country code, filter probe response at channel(%d).\n", network->channel);
 					goto out;
 				}
 			} else {
 				// Case 2: No any country code.
 				// Filter over channel ch12~14
 				if (network->channel > 11) {
-					netdev_warn(ieee->dev, "GetScanInfo(): For Global Domain, filter probe response at channel(%d).\n", network->channel);
+					printk("GetScanInfo(): For Global Domain, filter probe response at channel(%d).\n", network->channel);
 					goto out;
 				}
 			}
@@ -2279,14 +2372,14 @@ static inline void ieee80211_process_probe_response(
 			if (IS_COUNTRY_IE_VALID(ieee)) {
 				// Case 1: Country code
 				if (!is_legal_channel(ieee, network->channel)) {
-					netdev_warn(ieee->dev, "GetScanInfo(): For Country code, filter beacon at channel(%d).\n", network->channel);
+					printk("GetScanInfo(): For Country code, filter beacon at channel(%d).\n", network->channel);
 					goto out;
 				}
 			} else {
 				// Case 2: No any country code.
 				// Filter over channel ch12~14
 				if (network->channel > 14) {
-					netdev_warn(ieee->dev, "GetScanInfo(): For Global Domain, filter beacon at channel(%d).\n", network->channel);
+					printk("GetScanInfo(): For Global Domain, filter beacon at channel(%d).\n", network->channel);
 					goto out;
 				}
 			}

@@ -55,9 +55,9 @@ static int rk_aif1_hw_params(struct snd_pcm_substream *substream,
 			     struct snd_pcm_hw_params *params)
 {
 	int ret = 0;
-	struct snd_soc_pcm_runtime *rtd = asoc_substream_to_rtd(substream);
-	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
-	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct snd_soc_dai *cpu_dai = rtd->cpu_dai;
+	struct snd_soc_dai *codec_dai = rtd->codec_dai;
 	int mclk;
 
 	switch (params_rate(params)) {
@@ -107,13 +107,13 @@ static int rk_init(struct snd_soc_pcm_runtime *runtime)
 				    SND_JACK_HEADPHONE | SND_JACK_MICROPHONE |
 				    SND_JACK_BTN_0 | SND_JACK_BTN_1 |
 				    SND_JACK_BTN_2 | SND_JACK_BTN_3,
-				    &headset_jack);
+				    &headset_jack, NULL, 0);
 	if (ret) {
 		dev_err(card->dev, "New Headset Jack failed! (%d)\n", ret);
 		return ret;
 	}
 
-	return rt5645_set_jack_detect(asoc_rtd_to_codec(runtime, 0)->component,
+	return rt5645_set_jack_detect(runtime->codec_dai->component,
 				     &headset_jack,
 				     &headset_jack,
 				     &headset_jack);
@@ -206,12 +206,14 @@ put_codec_of_node:
 	return ret;
 }
 
-static void snd_rk_mc_remove(struct platform_device *pdev)
+static int snd_rk_mc_remove(struct platform_device *pdev)
 {
 	of_node_put(rk_dailink.cpus->of_node);
 	rk_dailink.cpus->of_node = NULL;
 	of_node_put(rk_dailink.codecs->of_node);
 	rk_dailink.codecs->of_node = NULL;
+
+	return 0;
 }
 
 static const struct of_device_id rockchip_rt5645_of_match[] = {
@@ -223,7 +225,7 @@ MODULE_DEVICE_TABLE(of, rockchip_rt5645_of_match);
 
 static struct platform_driver snd_rk_mc_driver = {
 	.probe = snd_rk_mc_probe,
-	.remove_new = snd_rk_mc_remove,
+	.remove = snd_rk_mc_remove,
 	.driver = {
 		.name = DRV_NAME,
 		.pm = &snd_soc_pm_ops,

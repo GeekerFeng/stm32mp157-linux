@@ -83,7 +83,7 @@ static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 			goto unlock;
 	}
 
-	ctx->more = false;
+	ctx->more = 0;
 
 	while (msg_data_left(msg)) {
 		int len = msg_data_left(msg);
@@ -102,12 +102,11 @@ static int hash_sendmsg(struct socket *sock, struct msghdr *msg,
 		err = crypto_wait_req(crypto_ahash_update(&ctx->req),
 				      &ctx->wait);
 		af_alg_free_sg(&ctx->sgl);
-		if (err) {
-			iov_iter_revert(&msg->msg_iter, len);
+		if (err)
 			goto unlock;
-		}
 
 		copied += len;
+		iov_iter_advance(&msg->msg_iter, len);
 	}
 
 	err = 0;
@@ -212,7 +211,7 @@ static int hash_recvmsg(struct socket *sock, struct msghdr *msg, size_t len,
 	}
 
 	if (!result || ctx->more) {
-		ctx->more = false;
+		ctx->more = 0;
 		err = crypto_wait_req(crypto_ahash_final(&ctx->req),
 				      &ctx->wait);
 		if (err)
@@ -235,19 +234,12 @@ static int hash_accept(struct socket *sock, struct socket *newsock, int flags,
 	struct alg_sock *ask = alg_sk(sk);
 	struct hash_ctx *ctx = ask->private;
 	struct ahash_request *req = &ctx->req;
-	struct crypto_ahash *tfm;
+	char state[HASH_MAX_STATESIZE];
 	struct sock *sk2;
 	struct alg_sock *ask2;
 	struct hash_ctx *ctx2;
-	char *state;
 	bool more;
 	int err;
-
-	tfm = crypto_ahash_reqtfm(req);
-	state = kmalloc(crypto_ahash_statesize(tfm), GFP_KERNEL);
-	err = -ENOMEM;
-	if (!state)
-		goto out;
 
 	lock_sock(sk);
 	more = ctx->more;
@@ -255,11 +247,11 @@ static int hash_accept(struct socket *sock, struct socket *newsock, int flags,
 	release_sock(sk);
 
 	if (err)
-		goto out_free_state;
+		return err;
 
 	err = af_alg_accept(ask->parent, newsock, kern);
 	if (err)
-		goto out_free_state;
+		return err;
 
 	sk2 = newsock->sk;
 	ask2 = alg_sk(sk2);
@@ -267,7 +259,7 @@ static int hash_accept(struct socket *sock, struct socket *newsock, int flags,
 	ctx2->more = more;
 
 	if (!more)
-		goto out_free_state;
+		return err;
 
 	err = crypto_ahash_import(&ctx2->req, state);
 	if (err) {
@@ -275,10 +267,6 @@ static int hash_accept(struct socket *sock, struct socket *newsock, int flags,
 		sock_put(sk2);
 	}
 
-out_free_state:
-	kfree_sensitive(state);
-
-out:
 	return err;
 }
 
@@ -291,8 +279,10 @@ static struct proto_ops algif_hash_ops = {
 	.ioctl		=	sock_no_ioctl,
 	.listen		=	sock_no_listen,
 	.shutdown	=	sock_no_shutdown,
+	.getsockopt	=	sock_no_getsockopt,
 	.mmap		=	sock_no_mmap,
 	.bind		=	sock_no_bind,
+	.setsockopt	=	sock_no_setsockopt,
 
 	.release	=	af_alg_release,
 	.sendmsg	=	hash_sendmsg,
@@ -311,7 +301,7 @@ static int hash_check_key(struct socket *sock)
 	struct alg_sock *ask = alg_sk(sk);
 
 	lock_sock(sk);
-	if (!atomic_read(&ask->nokey_refcnt))
+	if (ask->refcnt)
 		goto unlock_child;
 
 	psk = ask->parent;
@@ -323,8 +313,11 @@ static int hash_check_key(struct socket *sock)
 	if (crypto_ahash_get_flags(tfm) & CRYPTO_TFM_NEED_KEY)
 		goto unlock;
 
-	atomic_dec(&pask->nokey_refcnt);
-	atomic_set(&ask->nokey_refcnt, 0);
+	if (!pask->refcnt++)
+		sock_hold(psk);
+
+	ask->refcnt = 1;
+	sock_put(psk);
 
 	err = 0;
 
@@ -393,8 +386,10 @@ static struct proto_ops algif_hash_ops_nokey = {
 	.ioctl		=	sock_no_ioctl,
 	.listen		=	sock_no_listen,
 	.shutdown	=	sock_no_shutdown,
+	.getsockopt	=	sock_no_getsockopt,
 	.mmap		=	sock_no_mmap,
 	.bind		=	sock_no_bind,
+	.setsockopt	=	sock_no_setsockopt,
 
 	.release	=	af_alg_release,
 	.sendmsg	=	hash_sendmsg_nokey,
@@ -441,7 +436,7 @@ static int hash_accept_parent_nokey(void *private, struct sock *sk)
 
 	ctx->result = NULL;
 	ctx->len = len;
-	ctx->more = false;
+	ctx->more = 0;
 	crypto_init_wait(&ctx->wait);
 
 	ask->private = ctx;

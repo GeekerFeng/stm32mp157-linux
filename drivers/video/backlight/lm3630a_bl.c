@@ -12,7 +12,6 @@
 #include <linux/uaccess.h>
 #include <linux/interrupt.h>
 #include <linux/regmap.h>
-#include <linux/gpio/consumer.h>
 #include <linux/pwm.h>
 #include <linux/platform_data/lm3630a_bl.h>
 
@@ -49,10 +48,8 @@ struct lm3630a_chip {
 	struct lm3630a_platform_data *pdata;
 	struct backlight_device *bleda;
 	struct backlight_device *bledb;
-	struct gpio_desc *enable_gpio;
 	struct regmap *regmap;
 	struct pwm_device *pwmd;
-	struct pwm_state pwmd_state;
 };
 
 /* i2c access */
@@ -168,19 +165,16 @@ static int lm3630a_intr_config(struct lm3630a_chip *pchip)
 	return rval;
 }
 
-static int lm3630a_pwm_ctrl(struct lm3630a_chip *pchip, int br, int br_max)
+static void lm3630a_pwm_ctrl(struct lm3630a_chip *pchip, int br, int br_max)
 {
-	int err;
+	unsigned int period = pchip->pdata->pwm_period;
+	unsigned int duty = br * period / br_max;
 
-	pchip->pwmd_state.period = pchip->pdata->pwm_period;
-
-	err = pwm_set_relative_duty_cycle(&pchip->pwmd_state, br, br_max);
-	if (err)
-		return err;
-
-	pchip->pwmd_state.enabled = pchip->pwmd_state.duty_cycle ? true : false;
-
-	return pwm_apply_state(pchip->pwmd, &pchip->pwmd_state);
+	pwm_config(pchip->pwmd, duty, period);
+	if (duty)
+		pwm_enable(pchip->pwmd);
+	else
+		pwm_disable(pchip->pwmd);
 }
 
 /* update and get brightness */
@@ -191,9 +185,11 @@ static int lm3630a_bank_a_update_status(struct backlight_device *bl)
 	enum lm3630a_pwm_ctrl pwm_ctrl = pchip->pdata->pwm_ctrl;
 
 	/* pwm control */
-	if ((pwm_ctrl & LM3630A_PWM_BANK_A) != 0)
-		return lm3630a_pwm_ctrl(pchip, bl->props.brightness,
-					bl->props.max_brightness);
+	if ((pwm_ctrl & LM3630A_PWM_BANK_A) != 0) {
+		lm3630a_pwm_ctrl(pchip, bl->props.brightness,
+				 bl->props.max_brightness);
+		return bl->props.brightness;
+	}
 
 	/* disable sleep */
 	ret = lm3630a_update(pchip, REG_CTRL, 0x80, 0x00);
@@ -212,8 +208,8 @@ static int lm3630a_bank_a_update_status(struct backlight_device *bl)
 	return 0;
 
 out_i2c_err:
-	dev_err(pchip->dev, "i2c failed to access (%pe)\n", ERR_PTR(ret));
-	return ret;
+	dev_err(pchip->dev, "i2c failed to access\n");
+	return bl->props.brightness;
 }
 
 static int lm3630a_bank_a_get_brightness(struct backlight_device *bl)
@@ -266,9 +262,11 @@ static int lm3630a_bank_b_update_status(struct backlight_device *bl)
 	enum lm3630a_pwm_ctrl pwm_ctrl = pchip->pdata->pwm_ctrl;
 
 	/* pwm control */
-	if ((pwm_ctrl & LM3630A_PWM_BANK_B) != 0)
-		return lm3630a_pwm_ctrl(pchip, bl->props.brightness,
-					bl->props.max_brightness);
+	if ((pwm_ctrl & LM3630A_PWM_BANK_B) != 0) {
+		lm3630a_pwm_ctrl(pchip, bl->props.brightness,
+				 bl->props.max_brightness);
+		return bl->props.brightness;
+	}
 
 	/* disable sleep */
 	ret = lm3630a_update(pchip, REG_CTRL, 0x80, 0x00);
@@ -287,8 +285,8 @@ static int lm3630a_bank_b_update_status(struct backlight_device *bl)
 	return 0;
 
 out_i2c_err:
-	dev_err(pchip->dev, "i2c failed to access (%pe)\n", ERR_PTR(ret));
-	return ret;
+	dev_err(pchip->dev, "i2c failed to access REG_CTRL\n");
+	return bl->props.brightness;
 }
 
 static int lm3630a_bank_b_get_brightness(struct backlight_device *bl)
@@ -391,7 +389,7 @@ static int lm3630a_parse_led_sources(struct fwnode_handle *node,
 		return ret;
 
 	for (i = 0; i < num_sources; i++) {
-		if (sources[i] != LM3630A_SINK_0 && sources[i] != LM3630A_SINK_1)
+		if (sources[i] < LM3630A_SINK_0 || sources[i] > LM3630A_SINK_1)
 			return -EINVAL;
 
 		ret |= BIT(sources[i]);
@@ -412,7 +410,7 @@ static int lm3630a_parse_bank(struct lm3630a_platform_data *pdata,
 	if (ret)
 		return ret;
 
-	if (bank != LM3630A_BANK_0 && bank != LM3630A_BANK_1)
+	if (bank < LM3630A_BANK_0 || bank > LM3630A_BANK_1)
 		return -EINVAL;
 
 	led_sources = lm3630a_parse_led_sources(node, BIT(bank));
@@ -482,16 +480,15 @@ static int lm3630a_parse_node(struct lm3630a_chip *pchip,
 
 	device_for_each_child_node(pchip->dev, node) {
 		ret = lm3630a_parse_bank(pdata, node, &seen_led_sources);
-		if (ret) {
-			fwnode_handle_put(node);
+		if (ret)
 			return ret;
-		}
 	}
 
 	return ret;
 }
 
-static int lm3630a_probe(struct i2c_client *client)
+static int lm3630a_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
 {
 	struct lm3630a_platform_data *pdata = dev_get_platdata(&client->dev);
 	struct lm3630a_chip *pchip;
@@ -537,13 +534,6 @@ static int lm3630a_probe(struct i2c_client *client)
 	}
 	pchip->pdata = pdata;
 
-	pchip->enable_gpio = devm_gpiod_get_optional(&client->dev, "enable",
-						GPIOD_OUT_HIGH);
-	if (IS_ERR(pchip->enable_gpio)) {
-		rval = PTR_ERR(pchip->enable_gpio);
-		return rval;
-	}
-
 	/* chip initialize */
 	rval = lm3630a_chip_init(pchip);
 	if (rval < 0) {
@@ -564,7 +554,11 @@ static int lm3630a_probe(struct i2c_client *client)
 			return PTR_ERR(pchip->pwmd);
 		}
 
-		pwm_init_state(pchip->pwmd, &pchip->pwmd_state);
+		/*
+		 * FIXME: pwm_apply_args() should be removed when switching to
+		 * the atomic PWM API.
+		 */
+		pwm_apply_args(pchip->pwmd);
 	}
 
 	/* interrupt enable  : irq 0 is not allowed */
@@ -578,7 +572,7 @@ static int lm3630a_probe(struct i2c_client *client)
 	return 0;
 }
 
-static void lm3630a_remove(struct i2c_client *client)
+static int lm3630a_remove(struct i2c_client *client)
 {
 	int rval;
 	struct lm3630a_chip *pchip = i2c_get_clientdata(client);
@@ -593,8 +587,10 @@ static void lm3630a_remove(struct i2c_client *client)
 
 	if (pchip->irq) {
 		free_irq(pchip->irq, pchip);
+		flush_workqueue(pchip->irqthread);
 		destroy_workqueue(pchip->irqthread);
 	}
+	return 0;
 }
 
 static const struct i2c_device_id lm3630a_id[] = {
@@ -602,21 +598,19 @@ static const struct i2c_device_id lm3630a_id[] = {
 	{}
 };
 
-MODULE_DEVICE_TABLE(i2c, lm3630a_id);
-
 static const struct of_device_id lm3630a_match_table[] = {
 	{ .compatible = "ti,lm3630a", },
 	{ },
 };
 
-MODULE_DEVICE_TABLE(of, lm3630a_match_table);
+MODULE_DEVICE_TABLE(i2c, lm3630a_id);
 
 static struct i2c_driver lm3630a_i2c_driver = {
 	.driver = {
 		   .name = LM3630A_NAME,
 		   .of_match_table = lm3630a_match_table,
 		   },
-	.probe_new = lm3630a_probe,
+	.probe = lm3630a_probe,
 	.remove = lm3630a_remove,
 	.id_table = lm3630a_id,
 };

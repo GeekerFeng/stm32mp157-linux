@@ -28,11 +28,10 @@
  * struct mlxreg_led_data - led control data:
  *
  * @data: led configuration data;
- * @led_cdev: led class data;
+ * @led_classdev: led class data;
  * @base_color: base led color (other colors have constant offset from base);
  * @led_data: led data;
  * @data_parent: pointer to private device control data of parent;
- * @led_cdev_name: class device name
  */
 struct mlxreg_led_data {
 	struct mlxreg_core_data *data;
@@ -229,8 +228,8 @@ static int mlxreg_led_config(struct mlxreg_led_priv_data *priv)
 			brightness = LED_OFF;
 			led_data->base_color = MLXREG_LED_GREEN_SOLID;
 		}
-		snprintf(led_data->led_cdev_name, sizeof(led_data->led_cdev_name),
-			 "mlxreg:%s", data->label);
+		sprintf(led_data->led_cdev_name, "%s:%s", "mlxreg",
+			data->label);
 		led_cdev->name = led_data->led_cdev_name;
 		led_cdev->brightness = brightness;
 		led_cdev->max_brightness = LED_ON;

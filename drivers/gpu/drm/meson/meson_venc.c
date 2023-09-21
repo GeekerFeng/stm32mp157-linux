@@ -45,7 +45,7 @@
  * The ENCI is designed for PAl or NTSC encoding and can go through the VDAC
  * directly for CVBS encoding or through the ENCI_DVI encoder for HDMI.
  * The ENCP is designed for Progressive encoding but can also generate
- * 1080i interlaced pixels, and was initially designed to encode pixels for
+ * 1080i interlaced pixels, and was initialy desined to encode pixels for
  * VDAC to output RGB ou YUV analog outputs.
  * It's output is only used through the ENCP_DVI encoder for HDMI.
  * The ENCL LVDS encoder is not implemented.
@@ -866,10 +866,10 @@ meson_venc_hdmi_supported_mode(const struct drm_display_mode *mode)
 			    DRM_MODE_FLAG_PVSYNC | DRM_MODE_FLAG_NVSYNC))
 		return MODE_BAD;
 
-	if (mode->hdisplay < 400 || mode->hdisplay > 1920)
+	if (mode->hdisplay < 640 || mode->hdisplay > 1920)
 		return MODE_BAD_HVALUE;
 
-	if (mode->vdisplay < 480 || mode->vdisplay > 1920)
+	if (mode->vdisplay < 480 || mode->vdisplay > 1200)
 		return MODE_BAD_VVALUE;
 
 	return MODE_OK;
@@ -890,8 +890,8 @@ bool meson_venc_hdmi_supported_vic(int vic)
 }
 EXPORT_SYMBOL_GPL(meson_venc_hdmi_supported_vic);
 
-static void meson_venc_hdmi_get_dmt_vmode(const struct drm_display_mode *mode,
-					  union meson_hdmi_venc_mode *dmt_mode)
+void meson_venc_hdmi_get_dmt_vmode(const struct drm_display_mode *mode,
+				   union meson_hdmi_venc_mode *dmt_mode)
 {
 	memset(dmt_mode, 0, sizeof(*dmt_mode));
 
@@ -946,9 +946,7 @@ bool meson_venc_hdmi_venc_repeat(int vic)
 EXPORT_SYMBOL_GPL(meson_venc_hdmi_venc_repeat);
 
 void meson_venc_hdmi_mode_set(struct meson_drm *priv, int vic,
-			      unsigned int ycrcb_map,
-			      bool yuv420_mode,
-			      const struct drm_display_mode *mode)
+			      struct drm_display_mode *mode)
 {
 	union meson_hdmi_venc_mode *vmode = NULL;
 	union meson_hdmi_venc_mode vmode_dmt;
@@ -1530,14 +1528,14 @@ void meson_venc_hdmi_mode_set(struct meson_drm *priv, int vic,
 	if (mode->flags & DRM_MODE_FLAG_PVSYNC)
 		reg |= VPU_HDMI_INV_VSYNC;
 
-	/* Output data format */
-	reg |= ycrcb_map;
+	/* Output data format: CbYCr */
+	reg |= VPU_HDMI_OUTPUT_CBYCR;
 
 	/*
 	 * Write rate to the async FIFO between VENC and HDMI.
 	 * One write every 2 wr_clk.
 	 */
-	if (venc_repeat || yuv420_mode)
+	if (venc_repeat)
 		reg |= VPU_HDMI_WR_RATE(2);
 
 	/*
