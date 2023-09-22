@@ -4,14 +4,24 @@
  * Author:   Gerald Baeza <gerald.baeza@st.com> for STMicroelectronics.
  */
 
-#define STM32_UART_BASE			0x40011000	/* USART1 */
 
 #ifdef CONFIG_STM32F4_DEBUG_UART
+#define STM32_UART_BASE			0x40011000	/* USART1 */
+#define STM32_UART_BASE_VIR		0x40011000	/* USART1 */
 #define STM32_USART_SR_OFF		0x00
 #define STM32_USART_TDR_OFF		0x04
 #endif
 
 #ifdef CONFIG_STM32F7_DEBUG_UART
+#define STM32_UART_BASE			0x40011000	/* USART1 */
+#define STM32_UART_BASE_VIR		0x40011000	/* USART1 */
+#define STM32_USART_SR_OFF		0x1C
+#define STM32_USART_TDR_OFF		0x28
+#endif
+
+#ifdef CONFIG_STM32MP1_DEBUG_UART
+#define STM32_UART_BASE			0x40010000	/* USART1 */
+#define STM32_UART_BASE_VIR		0xfe011000	/* USART1 */
 #define STM32_USART_SR_OFF		0x1C
 #define STM32_USART_TDR_OFF		0x28
 #endif
@@ -21,7 +31,7 @@
 
 .macro	addruart, rp, rv, tmp
 	ldr	\rp,      =STM32_UART_BASE	@ physical base
-	ldr	\rv,      =STM32_UART_BASE      @ virt base /* NoMMU */
+	ldr	\rv,      =STM32_UART_BASE_VIR      @ virt base /* NoMMU */
 .endm
 
 .macro  senduart,rd,rx

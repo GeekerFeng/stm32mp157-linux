@@ -1900,12 +1900,15 @@ static size_t log_output(int facility, int level, enum log_flags lflags, const c
 			 dict, dictlen, text, text_len);
 }
 
+#ifdef CONFIG_EARLY_PRINTK
+extern void printascii(const char *);
+#endif
 /* Must be called under logbuf_lock. */
 int vprintk_store(int facility, int level,
 		  const char *dict, size_t dictlen,
 		  const char *fmt, va_list args)
 {
-	static char textbuf[LOG_LINE_MAX];
+	static char textbuf[LOG_LINE_MAX] = {0};
 	char *text = textbuf;
 	size_t text_len;
 	enum log_flags lflags = 0;
@@ -1947,6 +1950,9 @@ int vprintk_store(int facility, int level,
 	if (dict)
 		lflags |= LOG_NEWLINE;
 
+#ifdef CONFIG_EARLY_PRINTK
+    printascii(text);
+#endif
 	return log_output(facility, level, lflags,
 			  dict, dictlen, text, text_len);
 }
