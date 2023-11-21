@@ -42,20 +42,38 @@
 
 			gpiof: gpio@50007000 {
 				status = "okay";
-				ngpios = <6>;
-				gpio-ranges = <&pinctrl 6 86 6>;
+				ngpios = <16>;
+				gpio-ranges = <&pinctrl 0 80 16>;
 			};
 
 			gpiog: gpio@50008000 {
 				status = "okay";
-				ngpios = <10>;
-				gpio-ranges = <&pinctrl 6 102 10>;
+				ngpios = <16>;
+				gpio-ranges = <&pinctrl 0 96 16>;
 			};
 
 			gpioh: gpio@50009000 {
 				status = "okay";
-				ngpios = <2>;
-				gpio-ranges = <&pinctrl 0 112 2>;
+				ngpios = <16>;
+				gpio-ranges = <&pinctrl 0 112 16>;
+			};
+
+			gpioi: gpio@5000a000 {
+				status = "okay";
+				ngpios = <16>;
+				gpio-ranges = <&pinctrl 0 128 16>;
+			};
+
+			gpioj: gpio@5000b000 {
+				status = "okay";
+				ngpios = <16>;
+				gpio-ranges = <&pinctrl 0 144 16>;
+			};
+
+			gpiok: gpio@5000c000 {
+				status = "okay";
+				ngpios = <8>;
+				gpio-ranges = <&pinctrl 0 160 8>;
 			};
 		};
 	};
